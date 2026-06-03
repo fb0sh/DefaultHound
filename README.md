@@ -36,25 +36,13 @@ defaulthound-gui
 ```
 
 ### 界面布局
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/7d257cbc-f2e5-4607-a4c6-90d1de868999" />
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  > Start Scan │ Log (0) │ Vulns (0) │  Clear  │ Export  │
-├──────────┬─────────────────────┬─────────────────────────┤
-│          │                     │                         │
-│ 目标管理   │  扫描结果（双视图）    │  统计信息               │
-│          │                     │                         │
-│ 输入目标  │  📋 实时日志          │  VULNERABLE  12        │
-│ [+ Add]  │  📊 漏洞表格          │  Secure     28        │
-│          │                     │  Error       3        │
-│ ☑ 目标1   │                     │                         │
-│ ☑ 目标2   │  (右键菜单：复制      │  Total: 43 checks     │
-│ ☑ 目标3   │   IP:Port/凭据/      │                         │
-│          │   详细信息)           │                         │
-├──────────┴─────────────────────┴─────────────────────────┤
-│  [████████░░] 78% │ 30/50 │ Vulns: 12 │ Rate: [30]  │
-└──────────────────────────────────────────────────────────┘
-```
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/6e6116d6-68c4-4d28-886c-c8249f405e41" />
+
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/88b13605-f8a1-472e-8df0-2b7c940ac715" />
+
+
 
 ### 功能特性
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
@@ -26,11 +27,31 @@ macro_rules! colored {
     }};
 }
 
-macro_rules! red    { ($s:expr) => { colored!("31", $s) }; }
-macro_rules! green  { ($s:expr) => { colored!("32", $s) }; }
-macro_rules! yellow { ($s:expr) => { colored!("33", $s) }; }
-macro_rules! cyan   { ($s:expr) => { colored!("36", $s) }; }
-macro_rules! bold   { ($s:expr) => { colored!("1", $s) }; }
+macro_rules! red {
+    ($s:expr) => {
+        colored!("31", $s)
+    };
+}
+macro_rules! green {
+    ($s:expr) => {
+        colored!("32", $s)
+    };
+}
+macro_rules! yellow {
+    ($s:expr) => {
+        colored!("33", $s)
+    };
+}
+macro_rules! cyan {
+    ($s:expr) => {
+        colored!("36", $s)
+    };
+}
+macro_rules! bold {
+    ($s:expr) => {
+        colored!("1", $s)
+    };
+}
 
 #[derive(Parser)]
 #[command(name = "defaulthound", version, about = "批量检测服务默认密码")]
@@ -61,12 +82,18 @@ struct Cli {
     /// 列出所有可检测的服务
     #[arg(short, long)]
     list: bool,
+
+    /// 仅显示高危结果
+    #[arg(short = 'v', long = "vuln")]
+    vuln_only: bool,
 }
 
 #[derive(Debug, Clone)]
 struct Target {
     ip: String,
     ports: Vec<u16>,
+    /// 如果指定，只扫描该服务（小写）
+    service_filter: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +106,13 @@ struct ScanEntry {
     vulnerable: bool,
 }
 
+/// 解析目标行，支持格式：
+/// - `ip`                         所有服务使用默认端口
+/// - `ip:port`                    所有服务使用指定端口
+/// - `ip:port1,port2`             所有服务使用多个端口
+/// - `redis^ip`                   Redis 使用默认端口
+/// - `redis^ip:port`              Redis 使用指定端口
+/// - `redis^ip:port1,port2`       Redis 使用多个端口
 fn parse_targets(content: &str) -> Vec<Target> {
     let mut targets = Vec::new();
     for line in content.lines() {
@@ -86,7 +120,17 @@ fn parse_targets(content: &str) -> Vec<Target> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some((ip, port_part)) = line.split_once(':') {
+
+        // 检查 service^target 格式
+        let (service_filter, rest) = if let Some(pos) = line.find('^') {
+            let svc = line[..pos].trim().to_lowercase();
+            let rest = line[pos + 1..].trim();
+            (Some(svc), rest)
+        } else {
+            (None, line)
+        };
+
+        if let Some((ip, port_part)) = rest.split_once(':') {
             let ports: Vec<u16> = port_part
                 .split(',')
                 .filter_map(|p| p.trim().parse().ok())
@@ -94,11 +138,13 @@ fn parse_targets(content: &str) -> Vec<Target> {
             targets.push(Target {
                 ip: ip.to_string(),
                 ports,
+                service_filter,
             });
         } else {
             targets.push(Target {
-                ip: line.to_string(),
+                ip: rest.to_string(),
                 ports: vec![],
+                service_filter,
             });
         }
     }
@@ -140,13 +186,20 @@ async fn main() -> anyhow::Result<()> {
         parse_targets(&content)
     } else {
         let ip = cli.ip.unwrap_or_else(|| "127.0.0.1".into());
-        vec![Target { ip, ports: vec![] }]
+        vec![Target {
+            ip,
+            ports: vec![],
+            service_filter: None,
+        }]
     };
 
     let checkers = checkers::all_checkers();
 
     if cli.list {
-        let mut services: Vec<_> = checkers.iter().map(|c| (c.service_name(), c.default_port())).collect();
+        let mut services: Vec<_> = checkers
+            .iter()
+            .map(|c| (c.service_name(), c.default_port()))
+            .collect();
         services.sort_by(|a, b| a.0.cmp(b.0));
         for (name, port) in services {
             println!("{:<20} {}", name, port);
@@ -158,35 +211,49 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("没有有效的目标");
     }
     let mut results: Vec<ScanEntry> = Vec::new();
+    let mut vuln_targets: HashSet<usize> = HashSet::new();
 
-    let tasks = targets.iter().flat_map(|target| {
-        checkers.iter().flat_map(move |checker| {
-            let ports = if target.ports.is_empty() {
-                vec![checker.default_port()]
-            } else {
-                target.ports.clone()
-            };
-            ports.into_iter().map(move |port| {
-                let ip = target.ip.clone();
-                async move {
-                    let result = checker.check(&ip, Some(port)).await;
-                    (checker.service_name(), ip, port, result)
+    let tasks = checkers.iter().flat_map(|checker| {
+        let svc_name = checker.service_name().to_lowercase();
+        targets
+            .iter()
+            .enumerate()
+            .filter_map(move |(target_idx, target)| {
+                // 如果指定了服务过滤，只运行匹配的服务
+                if let Some(ref filter) = target.service_filter {
+                    if *filter != svc_name {
+                        return None;
+                    }
                 }
+                let ports = if target.ports.is_empty() {
+                    vec![checker.default_port()]
+                } else {
+                    target.ports.clone()
+                };
+                Some(ports.into_iter().map(move |port| {
+                    let ip = target.ip.clone();
+                    async move {
+                        let result = checker.check(&ip, Some(port)).await;
+                        (target_idx, checker.service_name(), ip, port, result)
+                    }
+                }))
             })
-        })
+            .flatten()
     });
 
     let mut stream = futures::stream::iter(tasks).buffer_unordered(cli.rate);
 
-    while let Some((name, ip, port, result)) = stream.next().await {
+    while let Some((target_idx, name, ip, port, result)) = stream.next().await {
         match result {
             CheckResult::Secure(reason) => {
-                let tag = cyan!(&format!("[{name}]"));
-                let addr = bold!(&ip);
-                let port_str = cyan!(&port.to_string());
-                let status = green!("✓ 安全");
-                let detail = cyan!(&reason);
-                println!("{tag} {addr}:{port_str}  {status}  {detail}");
+                if !cli.vuln_only {
+                    let tag = cyan!(&format!("[{name}]"));
+                    let addr = bold!(&ip);
+                    let port_str = cyan!(&port.to_string());
+                    let status = green!("✓ 安全");
+                    let detail = cyan!(&reason);
+                    println!("{tag} {addr}:{port_str}  {status}  {detail}");
+                }
                 results.push(ScanEntry {
                     service: name.to_string(),
                     ip,
@@ -200,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
                 credentials,
                 details,
             } => {
+                vuln_targets.insert(target_idx);
                 let tag = red!(&format!("[VULN][{name}]({credentials})"));
                 let addr = bold!(&ip);
                 let port_str = red!(&port.to_string());
@@ -216,11 +284,13 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
             CheckResult::Error(e) => {
-                let tag = yellow!(&format!("[ERR][{name}]"));
-                let addr = bold!(&ip);
-                let port_str = yellow!(&port.to_string());
-                let msg = yellow!(&format!("⚠ {e}"));
-                println!("{tag} {addr}:{port_str}  {msg}");
+                if !cli.vuln_only {
+                    let tag = yellow!(&format!("[ERR][{name}]"));
+                    let addr = bold!(&ip);
+                    let port_str = yellow!(&port.to_string());
+                    let msg = yellow!(&format!("⚠ {e}"));
+                    println!("{tag} {addr}:{port_str}  {msg}");
+                }
                 results.push(ScanEntry {
                     service: name.to_string(),
                     ip,
@@ -233,13 +303,15 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let secure = results.iter().filter(|r| !r.vulnerable).count();
-    let vuln = results.iter().filter(|r| r.vulnerable).count();
+    let target_count = targets.len();
+    let vuln_count = vuln_targets.len();
+    let secure_count = target_count - vuln_count;
     println!("{}", cyan!("─").repeat(40));
-    println!("{}   {}   {}   {}",
-        bold!(&format!("总计 {}", results.len())),
-        green!(&format!("✓ 安全 {}", secure)),
-        red!(&format!("⚠ 高危 {}", vuln)),
+    println!(
+        "{}   {}   {}   {}",
+        bold!(&format!("目标数 {}", target_count)),
+        green!(&format!("✓ 安全 {}", secure_count)),
+        red!(&format!("⚠ 高危 {}", vuln_count)),
         bold!("DefaultHound"),
     );
 

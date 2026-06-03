@@ -2,46 +2,47 @@ mod mysql;
 mod redis;
 
 // TCP Socket 类
-mod ftp;
-mod zookeeper;
-mod mongodb;
-mod ldap;
-mod vnc;
-mod memcached;
-mod nfs;
+mod couchdb;
 mod dubbo;
+mod ftp;
+mod ldap;
+mod memcached;
+mod mongodb;
+mod nfs;
 mod rsync;
 mod smb;
 mod uwsgi;
-mod couchdb;
+mod vnc;
+mod zookeeper;
 
 // HTTP/Web 类
+mod activemq;
+mod crowd;
 mod docker;
 mod docker_registry;
-mod elasticsearch;
-mod jenkins;
-mod kibana;
-mod kubernetes;
-mod jupyter;
-mod nacos;
-mod ollama;
-mod spark;
-mod weblogic;
-mod hadoop;
-mod jboss;
-mod activemq;
-mod zabbix;
-mod rabbitmq;
-mod solr;
-mod harbor;
-mod wordpress;
-mod crowd;
-mod kong;
-mod thinkadmin;
-mod swagger;
-mod springboot;
 mod druid;
+mod elasticsearch;
+mod hadoop;
+mod harbor;
+mod jboss;
+mod jenkins;
+mod jupyter;
+mod kibana;
+mod kong;
+mod kubernetes;
+mod nacos;
+mod nacos_weakpass;
+mod ollama;
+mod rabbitmq;
 mod ruoyi;
+mod solr;
+mod spark;
+mod springboot;
+mod swagger;
+mod thinkadmin;
+mod weblogic;
+mod wordpress;
+mod zabbix;
 
 pub(crate) mod http_helpers;
 
@@ -51,7 +52,6 @@ pub fn all_checkers() -> Vec<Box<dyn ServiceChecker>> {
     vec![
         Box::new(mysql::MysqlChecker),
         Box::new(redis::RedisChecker),
-
         // ── TCP Socket ──
         Box::new(ftp::FtpChecker),
         Box::new(zookeeper::ZookeeperChecker),
@@ -65,7 +65,6 @@ pub fn all_checkers() -> Vec<Box<dyn ServiceChecker>> {
         Box::new(smb::SmbChecker),
         Box::new(uwsgi::UwsgiChecker),
         Box::new(couchdb::CouchdbChecker),
-
         // ── HTTP/Web ──
         Box::new(docker::DockerChecker),
         Box::new(docker_registry::DockerRegistryChecker),
@@ -75,6 +74,7 @@ pub fn all_checkers() -> Vec<Box<dyn ServiceChecker>> {
         Box::new(kubernetes::KubernetesChecker),
         Box::new(jupyter::JupyterChecker),
         Box::new(nacos::NacosChecker),
+        Box::new(nacos_weakpass::NacosWeakpassChecker),
         Box::new(ollama::OllamaChecker),
         Box::new(spark::SparkChecker),
         Box::new(weblogic::WeblogicChecker),

@@ -39,7 +39,25 @@ defaulthound -f targets.txt -j result.json --csv result.csv
 
 # 调高速率
 defaulthound -f targets.txt -r 100
+
+# 仅显示高危结果
+defaulthound -f targets.txt -v
 ```
+
+### 目标格式
+
+目标文件每行支持以下格式：
+
+| 格式 | 说明 | 示例 |
+|------|------|------|
+| `ip` | 扫描所有服务 | `192.168.1.1` |
+| `ip:port` | 指定端口扫描所有服务 | `192.168.1.1:3306` |
+| `ip:port1,port2` | 指定多个端口 | `192.168.1.1:3306,6379` |
+| `service^ip` | 只扫描指定服务 | `redis^192.168.1.1` |
+| `service^ip:port` | 指定服务 + 端口 | `redis^192.168.1.1:6379` |
+| `service^ip:port1,port2` | 指定服务 + 多端口 | `redis^192.168.1.1:6379,6380` |
+
+服务名不区分大小写。带 `service^` 前缀时只运行该服务的检测器。
 
 ### 输出格式
 
@@ -47,11 +65,19 @@ defaulthound -f targets.txt -r 100
 [MySQL] 127.0.0.1:3306  安全  端口未开放
 [VULN][Redis](无需认证) 192.168.1.5:6379
 [ERR][Docker] 10.0.0.1:2375  连接超时
----
-总计 40  安全 38  高危 2
+────────────────────────────────────────
+目标数 3  ✓ 安全 2  ⚠ 高危 1  DefaultHound
 ```
 
 `[VULN]` 行可直接被 grep 提取。
+
+统计按目标行数计算：一个目标只要有一个服务存在漏洞即计为高危。
+
+使用 `-v`（`--vuln`）时只输出高危行：
+
+```
+defaulthound -f targets.txt -v
+```
 
 ## 内置服务 (40 个)
 

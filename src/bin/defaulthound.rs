@@ -10,6 +10,28 @@ use defaulthound::checkers;
 
 const MAX_CONCURRENT: usize = 30;
 
+// ── ANSI color helpers ──
+/// Check if stdout is a terminal (for color output)
+fn is_colorful() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+macro_rules! colored {
+    ($code:expr, $s:expr) => {{
+        if is_colorful() {
+            format!("\x1b[{}m{}\x1b[0m", $code, $s)
+        } else {
+            $s.to_string()
+        }
+    }};
+}
+
+macro_rules! red    { ($s:expr) => { colored!("31", $s) }; }
+macro_rules! green  { ($s:expr) => { colored!("32", $s) }; }
+macro_rules! yellow { ($s:expr) => { colored!("33", $s) }; }
+macro_rules! cyan   { ($s:expr) => { colored!("36", $s) }; }
+macro_rules! bold   { ($s:expr) => { colored!("1", $s) }; }
+
 #[derive(Parser)]
 #[command(name = "defaulthound", version, about = "批量检测服务默认密码")]
 struct Cli {
@@ -159,7 +181,12 @@ async fn main() -> anyhow::Result<()> {
     while let Some((name, ip, port, result)) = stream.next().await {
         match result {
             CheckResult::Secure(reason) => {
-                println!("[{name}] {ip}:{port}  安全  {reason}");
+                let tag = cyan!(&format!("[{name}]"));
+                let addr = bold!(&ip);
+                let port_str = cyan!(&port.to_string());
+                let status = green!("✓ 安全");
+                let detail = cyan!(&reason);
+                println!("{tag} {addr}:{port_str}  {status}  {detail}");
                 results.push(ScanEntry {
                     service: name.to_string(),
                     ip,
@@ -173,7 +200,12 @@ async fn main() -> anyhow::Result<()> {
                 credentials,
                 details,
             } => {
-                println!("[VULN][{}]({}) {}:{}", name, credentials, ip, port);
+                let tag = red!(&format!("[VULN][{name}]({credentials})"));
+                let addr = bold!(&ip);
+                let port_str = red!(&port.to_string());
+                let status = red!("⚠ 高危");
+                let detail = cyan!(&details);
+                println!("{tag} {addr}:{port_str}  {status}  {detail}");
                 results.push(ScanEntry {
                     service: name.to_string(),
                     ip,
@@ -184,7 +216,11 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
             CheckResult::Error(e) => {
-                println!("[ERR][{name}] {ip}:{port}  {e}");
+                let tag = yellow!(&format!("[ERR][{name}]"));
+                let addr = bold!(&ip);
+                let port_str = yellow!(&port.to_string());
+                let msg = yellow!(&format!("⚠ {e}"));
+                println!("{tag} {addr}:{port_str}  {msg}");
                 results.push(ScanEntry {
                     service: name.to_string(),
                     ip,
@@ -199,8 +235,13 @@ async fn main() -> anyhow::Result<()> {
 
     let secure = results.iter().filter(|r| !r.vulnerable).count();
     let vuln = results.iter().filter(|r| r.vulnerable).count();
-    println!("---");
-    println!("总计 {}  安全 {}  高危 {}", results.len(), secure, vuln);
+    println!("{}", cyan!("─").repeat(40));
+    println!("{}   {}   {}   {}",
+        bold!(&format!("总计 {}", results.len())),
+        green!(&format!("✓ 安全 {}", secure)),
+        red!(&format!("⚠ 高危 {}", vuln)),
+        bold!("DefaultHound"),
+    );
 
     if let Some(path) = &cli.json {
         let json = serde_json::to_string_pretty(&results)?;

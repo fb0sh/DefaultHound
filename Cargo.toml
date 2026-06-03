@@ -1,6 +1,6 @@
 [package]
 name = "defaulthound"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 description = "A batch scanner that hunts default/empty passwords across network services"
 license = "MIT"
@@ -19,11 +19,7 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 csv = "1.3"
 futures = "0.3"
-reqwest = {
-  version = "0.12",
-  default-features = false,
-  features = ["rustls-tls"]
-}
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

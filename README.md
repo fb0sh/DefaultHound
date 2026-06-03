@@ -1,6 +1,6 @@
 # DefaultHound
 
-批量检测服务默认密码/空密码的安全扫描工具，Rust 实现。
+批量检测服务默认密码/空密码的安全扫描工具，Rust 实现。内置 40 个服务检测器，基于 Tokio 异步并发，支持批量扫描、JSON/CSV 导出。
 
 ## 安装
 
@@ -16,8 +16,6 @@ cd default_hound
 cargo install --path .
 ```
 
-> 即将发布到 [crates.io](https://crates.io)。
-
 ## 使用
 
 ```bash
@@ -27,11 +25,14 @@ defaulthound
 # 扫描指定 IP
 defaulthound 192.168.1.1
 
-# 从文件批量扫描（每行一个 IP 或 IP:端口）
+# 从文件批量扫描
 defaulthound -f targets.txt
 
 # 从 stdin 输入
 cat targets.txt | defaulthound
+
+# 列出所有可检测的服务
+defaulthound -l
 
 # 导出结果
 defaulthound -f targets.txt -j result.json --csv result.csv
@@ -43,14 +44,20 @@ defaulthound -f targets.txt -r 100
 ### 输出格式
 
 ```
-[HTTP] 127.0.0.1:80  安全  端口 80 未开放
-[VULN][MySQL](root:) 192.168.1.5:3306
-[ERR][Redis] 10.0.0.1:6379  连接超时
+[MySQL] 127.0.0.1:3306  安全  端口未开放
+[VULN][Redis](无需认证) 192.168.1.5:6379
+[ERR][Docker] 10.0.0.1:2375  连接超时
 ---
-总计 5  安全 3  高危 2
+总计 40  安全 38  高危 2
 ```
 
-`[VULN]` 行可直接被 grep 等工具提取。
+`[VULN]` 行可直接被 grep 提取。
+
+## 内置服务 (40 个)
+
+| TCP Socket (12) | HTTP/Web (26) | 已有 (2) |
+|----------------|---------------|----------|
+| FTP, ZooKeeper, MongoDB, LDAP, VNC, Memcached, NFS, Dubbo, Rsync, SMB, uWSGI, CouchDB | Docker, DockerRegistry, Elasticsearch, Jenkins, Kibana, Kubernetes, Jupyter, Nacos, Ollama, Spark, WebLogic, Hadoop, JBoss, ActiveMQ, Zabbix, RabbitMQ, Solr, Harbor, WordPress, Crowd, Kong, ThinkAdmin, Swagger, SpringBoot, Druid, RuoYi | MySQL, Redis |
 
 ## 架构
 
@@ -63,12 +70,14 @@ src/
 │   └── defaulthound-gui.rs  # GUI 占位
 └── checkers/
     ├── mod.rs           # 注册中心
-    ├── http.rs          # HTTP Basic Auth 爆破
-    ├── mysql.rs         # MySQL 握手版本泄露
-    └── redis.rs         # Redis 无认证 PING
+    ├── http_helpers.rs  # HTTP 检测辅助函数
+    ├── mysql.rs         # MySQL
+    ├── redis.rs         # Redis
+    ├── ftp.rs           # ...
+    └── ...              # 每个服务独立文件
 ```
 
-## 开发：添加一个新的 Checker
+## 添加一个新的 Service Checker
 
 ```rust
 use crate::prelude::*;
@@ -84,16 +93,17 @@ impl ServiceChecker for MyService {
     ]}
     async fn check(&self, ip: &str, port: Option<u16>) -> CheckResult {
         let port = port.unwrap_or(self.default_port());
-        let mut stream = match self.try_tcp_connect(ip, port).await {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
+        let mut stream = try_connect!(self, ip, port);
         // 检测逻辑...
+        CheckResult::Vulnerable {
+            credentials: "admin:admin".into(),
+            details: "默认凭据有效".into(),
+        }
     }
 }
 ```
 
-然后在 `src/checkers/mod.rs` 加两行：
+在 `mod.rs` 加两行：
 
 ```diff
 + mod my_service;
@@ -106,14 +116,12 @@ impl ServiceChecker for MyService {
 
 ## 参考项目
 
-DefaultHound 的灵感来源于以下未授权访问检测工具：
+灵感来源于：
 
-- **[Unauthorized_VUl](https://github.com/hackerchuan1/Unauthorized_VUl)** — Python 实现，40+ 常见未授权漏洞检测，CLI 批量扫描
-- **[Unauthorized_VUL_GUI](https://github.com/phoenix118go/Unauthorized_VUL_GUI)** — 基于 PyQt6 的 GUI 版本，支持自定义端口和 Excel 导出
-- **[Unauth-Vuln-Scanner](https://github.com/willsafe/Unauth-Vuln-Scanner)** — Java Swing GUI，39+ 服务探测，SOCKS5 代理支持
-- **[unauthorized](https://github.com/xk11z/unauthorized)** — Python 命令行版，支持多线程批量扫描
-
-DefaultHound 采用 Rust 重写，将检测重心从"未授权访问"转向"默认密码/空密码"，以插件化架构提升协作效率。
+- **[Unauthorized_VUl](https://github.com/hackerchuan1/Unauthorized_VUl)** — Python 实现，40+ 未授权漏洞检测
+- **[Unauthorized_VUL_GUI](https://github.com/phoenix118go/Unauthorized_VUL_GUI)** — PyQt6 GUI 版本
+- **[Unauth-Vuln-Scanner](https://github.com/willsafe/Unauth-Vuln-Scanner)** — Java Swing GUI
+- **[unauthorized](https://github.com/xk11z/unauthorized)** — Python 命令行版
 
 ## License
 

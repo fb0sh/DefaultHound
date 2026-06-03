@@ -35,6 +35,10 @@ struct Cli {
     /// 并发数，调高可加快扫描
     #[arg(short, long, default_value_t = MAX_CONCURRENT)]
     rate: usize,
+
+    /// 列出所有可检测的服务
+    #[arg(short, long)]
+    list: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -117,11 +121,20 @@ async fn main() -> anyhow::Result<()> {
         vec![Target { ip, ports: vec![] }]
     };
 
+    let checkers = checkers::all_checkers();
+
+    if cli.list {
+        let mut services: Vec<_> = checkers.iter().map(|c| (c.service_name(), c.default_port())).collect();
+        services.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, port) in services {
+            println!("{:<20} {}", name, port);
+        }
+        return Ok(());
+    }
+
     if targets.is_empty() {
         anyhow::bail!("没有有效的目标");
     }
-
-    let checkers = checkers::all_checkers();
     let mut results: Vec<ScanEntry> = Vec::new();
 
     let tasks = targets.iter().flat_map(|target| {

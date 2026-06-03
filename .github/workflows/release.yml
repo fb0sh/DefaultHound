@@ -5,30 +5,35 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - target: x86_64-linux
+          - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            arch: x86_64
-          - target: x86_64-windows
+
+          - target: x86_64-pc-windows-msvc
             os: windows-latest
-            arch: x86_64
-          - target: aarch64-macos
+
+          - target: aarch64-apple-darwin
             os: macos-latest
-            arch: aarch64
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux system deps
+      - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
@@ -39,70 +44,76 @@ jobs:
             libx11-dev \
             libwayland-dev
 
-      - name: Build CLI (defaulthound)
+      - name: Build CLI
         run: cargo build --release --bin defaulthound
         env:
           CARGO_PROFILE_RELEASE_LTO: fat
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
 
-      - name: Build GUI (defaulthound-gui)
+      - name: Build GUI
         run: cargo build --release --bin defaulthound-gui
         env:
           CARGO_PROFILE_RELEASE_LTO: fat
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
 
-      - name: Package CLI
+      - name: Package
         shell: bash
         run: |
           mkdir -p dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp target/release/defaulthound.exe dist/
-            cd dist && zip -r ../defaulthound-${{ matrix.target }}.zip defaulthound.exe
-          else
-            cp target/release/defaulthound dist/
-            tar czf defaulthound-${{ matrix.target }}.tar.gz -C dist defaulthound
-          fi
 
-      - name: Package GUI
-        shell: bash
-        run: |
-          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME}"
+
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp target/release/defaulthound-gui.exe dist/
-            cd dist && zip -r ../defaulthound-gui-${{ matrix.target }}.zip defaulthound-gui.exe
+
+            cp target/release/defaulthound.exe \
+              "dist/defaulthound-${{ matrix.target }}-${VERSION}.exe"
+
+            cp target/release/defaulthound-gui.exe \
+              "dist/defaulthound-gui-${{ matrix.target }}-${VERSION}.exe"
+
           else
-            cp target/release/defaulthound-gui dist/
-            tar czf defaulthound-gui-${{ matrix.target }}.tar.gz -C dist defaulthound-gui
+
+            cp target/release/defaulthound dist/defaulthound
+
+            tar -czf \
+              "dist/defaulthound-${{ matrix.target }}-${VERSION}.tar.gz" \
+              -C dist defaulthound
+
+            rm dist/defaulthound
+
+            cp target/release/defaulthound-gui dist/defaulthound-gui
+
+            tar -czf \
+              "dist/defaulthound-gui-${{ matrix.target }}-${VERSION}.tar.gz" \
+              -C dist defaulthound-gui
+
+            rm dist/defaulthound-gui
+
           fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: defaulthound-${{ matrix.target }}
-          path: |
-            defaulthound-${{ matrix.target }}.tar.gz
-            defaulthound-gui-${{ matrix.target }}.tar.gz
-            defaulthound-${{ matrix.target }}.zip
-            defaulthound-gui-${{ matrix.target }}.zip
+          name: ${{ matrix.target }}
+          path: dist/*
 
   release:
-    needs: [build]
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+    steps:
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Collect release assets
-        shell: bash
+      - name: Collect assets
         run: |
           mkdir -p release-assets
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release-assets/ \;
+          find artifacts -type f -exec cp {} release-assets/ \;
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*

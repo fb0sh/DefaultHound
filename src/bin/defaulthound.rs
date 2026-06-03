@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
@@ -54,7 +54,7 @@ macro_rules! bold {
 }
 
 #[derive(Parser)]
-#[command(name = "defaulthound", version, about = "批量检测服务默认密码")]
+#[command(name = "defaulthound", version, about = "批量检测服务默认密码 | <fb0sh@outlook.com> https://github.com/fb0sh/DefaultHound")]
 struct Cli {
     /// 目标 IP（默认 localhost，使用 --file 时忽略此参数）
     ip: Option<String>,
@@ -91,9 +91,10 @@ struct Cli {
 #[derive(Debug, Clone)]
 struct Target {
     ip: String,
+    /// 纯端口列表（无 `^` 时匹配服务默认端口）
     ports: Vec<u16>,
-    /// 如果指定，只扫描该服务（小写）
-    service_filter: Option<String>,
+    /// 服务级覆盖：service → port，有值时仅运行这些服务
+    overrides: HashMap<String, Option<u16>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,12 +108,12 @@ struct ScanEntry {
 }
 
 /// 解析目标行，支持格式：
-/// - `ip`                         所有服务使用默认端口
-/// - `ip:port`                    所有服务使用指定端口
-/// - `ip:port1,port2`             所有服务使用多个端口
-/// - `redis^ip`                   Redis 使用默认端口
-/// - `redis^ip:port`              Redis 使用指定端口
-/// - `redis^ip:port1,port2`       Redis 使用多个端口
+/// - `ip`                         扫描所有服务（各自默认端口）
+/// - `ip:port`                    只扫描匹配该端口的服务
+/// - `ip:port1,port2`             只扫描匹配这些端口的服务
+/// - `ip:redis^port`              Redis 使用指定端口
+/// - `ip:redis^port1,redis2^port2` 多个服务各自指定端口
+/// - `ip:redis^`                  Redis 使用默认端口
 fn parse_targets(content: &str) -> Vec<Target> {
     let mut targets = Vec::new();
     for line in content.lines() {
@@ -121,30 +122,43 @@ fn parse_targets(content: &str) -> Vec<Target> {
             continue;
         }
 
-        // 检查 service^target 格式
-        let (service_filter, rest) = if let Some(pos) = line.find('^') {
-            let svc = line[..pos].trim().to_lowercase();
-            let rest = line[pos + 1..].trim();
-            (Some(svc), rest)
-        } else {
-            (None, line)
-        };
+        // 格式: ip, ip:port, ip:port1,port2, ip:service^port, ip:service^
+        if let Some((ip, port_part)) = line.split_once(':') {
+            let parts: Vec<&str> = port_part.split(',').map(|p| p.trim()).collect();
+            let has_caret = parts.iter().any(|p| p.contains('^'));
 
-        if let Some((ip, port_part)) = rest.split_once(':') {
-            let ports: Vec<u16> = port_part
-                .split(',')
-                .filter_map(|p| p.trim().parse().ok())
-                .collect();
-            targets.push(Target {
-                ip: ip.to_string(),
-                ports,
-                service_filter,
-            });
+            if has_caret {
+                let mut overrides = HashMap::new();
+                for part in parts {
+                    if let Some(pos) = part.find('^') {
+                        let svc = part[..pos].trim().to_lowercase();
+                        let port_str = part[pos + 1..].trim();
+                        let port = if port_str.is_empty() {
+                            None
+                        } else {
+                            port_str.parse::<u16>().ok()
+                        };
+                        overrides.insert(svc, port);
+                    }
+                }
+                targets.push(Target {
+                    ip: ip.to_string(),
+                    ports: vec![],
+                    overrides,
+                });
+            } else {
+                let ports: Vec<u16> = parts.iter().filter_map(|p| p.parse().ok()).collect();
+                targets.push(Target {
+                    ip: ip.to_string(),
+                    ports,
+                    overrides: HashMap::new(),
+                });
+            }
         } else {
             targets.push(Target {
-                ip: rest.to_string(),
+                ip: line.to_string(),
                 ports: vec![],
-                service_filter,
+                overrides: HashMap::new(),
             });
         }
     }
@@ -189,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
         vec![Target {
             ip,
             ports: vec![],
-            service_filter: None,
+            overrides: HashMap::new(),
         }]
     };
 
@@ -219,26 +233,29 @@ async fn main() -> anyhow::Result<()> {
             .iter()
             .enumerate()
             .filter_map(move |(target_idx, target)| {
-                // 如果指定了服务过滤，只运行匹配的服务
-                if let Some(ref filter) = target.service_filter {
-                    if *filter != svc_name {
-                        return None;
-                    }
+                // 有 overrides 时只运行匹配的服务
+                if !target.overrides.is_empty() {
+                    let port = match target.overrides.get(&svc_name) {
+                        Some(Some(p)) => *p,
+                        Some(None) => checker.default_port(),
+                        None => return None,
+                    };
+                    return Some((target_idx, port, target.ip.clone()));
                 }
-                let ports = if target.ports.is_empty() {
-                    vec![checker.default_port()]
+                // 无 overrides：用端口列表匹配默认端口，或全部运行
+                let port = if target.ports.is_empty() {
+                    checker.default_port()
+                } else if target.ports.contains(&checker.default_port()) {
+                    checker.default_port()
                 } else {
-                    target.ports.clone()
+                    return None;
                 };
-                Some(ports.into_iter().map(move |port| {
-                    let ip = target.ip.clone();
-                    async move {
-                        let result = checker.check(&ip, Some(port)).await;
-                        (target_idx, checker.service_name(), ip, port, result)
-                    }
-                }))
+                Some((target_idx, port, target.ip.clone()))
             })
-            .flatten()
+            .map(move |(target_idx, port, ip)| async move {
+                let result = checker.check(&ip, Some(port)).await;
+                (target_idx, checker.service_name(), ip, port, result)
+            })
     });
 
     let mut stream = futures::stream::iter(tasks).buffer_unordered(cli.rate);
@@ -312,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
         bold!(&format!("目标数 {}", target_count)),
         green!(&format!("✓ 安全 {}", secure_count)),
         red!(&format!("⚠ 高危 {}", vuln_count)),
-        bold!("DefaultHound"),
+        bold!("DefaultHound | <fb0sh@outlook.com> https://github.com/fb0sh/DefaultHound"),
     );
 
     if let Some(path) = &cli.json {

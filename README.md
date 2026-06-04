@@ -36,11 +36,17 @@ defaulthound-gui
 ```
 
 ### 界面布局
-<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/7d257cbc-f2e5-4607-a4c6-90d1de868999" />
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/da661478-6e8b-4f62-a986-40f5fbe589ff" />
 
-<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/6e6116d6-68c4-4d28-886c-c8249f405e41" />
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/bd8c4baf-7500-4148-b453-6ad6fe2437b6" />
 
-<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/88b13605-f8a1-472e-8df0-2b7c940ac715" />
+
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/e53afdf0-96ba-439c-a1c1-17266b3fbba1" />
+
+<img width="731" height="377" alt="image" src="https://github.com/user-attachments/assets/a68ba5db-a944-4f23-a2c7-21499c174488" />
+
+
+<img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/b8f6f2fa-dd4c-48d6-91ae-052768fc18c2" />
 
 
 

@@ -74,6 +74,7 @@ enum ViewMode {
     Log,
     VulnTable,
     DefaultCreds,
+    Checkers,
 }
 
 struct TargetRow {
@@ -497,15 +498,20 @@ impl eframe::App for DefaultHoundApp {
                             });
                         });
 
-                    // 右侧：DefaultCreds 顶到最右边
+                    // 右侧：Checkers + DefaultCreds
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.separator();
-                        let creds_label = "DefaultCreds";
                         if ui
-                            .selectable_label(self.view_mode == ViewMode::DefaultCreds, creds_label)
+                            .selectable_label(self.view_mode == ViewMode::DefaultCreds, "DefaultCreds")
                             .clicked()
                         {
                             self.view_mode = ViewMode::DefaultCreds;
+                        }
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::Checkers, "Checkers")
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::Checkers;
                         }
                     });
                 });
@@ -674,6 +680,7 @@ impl eframe::App for DefaultHoundApp {
             ViewMode::Log => self.show_log_view(ui),
             ViewMode::VulnTable => self.show_vuln_table(ui),
             ViewMode::DefaultCreds => self.show_default_creds(ui),
+            ViewMode::Checkers => self.show_checkers(ui),
         });
 
         // ── 底部状态栏 ──
@@ -897,6 +904,59 @@ impl DefaultHoundApp {
                             });
                         }
                     });
+            });
+    }
+
+    fn show_checkers(&self, ui: &mut egui::Ui) {
+        use defaulthound::checkers;
+
+        let mut checkers = checkers::all_checkers();
+        checkers.sort_by(|a, b| a.default_port().cmp(&b.default_port()).then(a.service_name().cmp(b.service_name())));
+        ui.heading(format!("Checkers ({} total)", checkers.len()));
+        ui.add_space(4.0);
+
+        let row_height = 20.0;
+        let avail_w = ui.available_width();
+        let col_w = [avail_w * 0.28, avail_w * 0.12, avail_w * 0.15, avail_w * 0.25, avail_w * 0.20];
+
+        // 表头
+        ui.horizontal(|ui| {
+            ui.set_height(row_height);
+            ui.allocate_ui_with_layout(egui::vec2(col_w[0], row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.strong("Service"); });
+            ui.allocate_ui_with_layout(egui::vec2(col_w[1], row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.strong("Port"); });
+            ui.allocate_ui_with_layout(egui::vec2(col_w[2], row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.strong("Type"); });
+            ui.allocate_ui_with_layout(egui::vec2(col_w[3], row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.strong("Default Creds"); });
+            ui.allocate_ui_with_layout(egui::vec2(col_w[4], row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| { ui.strong("Examples"); });
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show_rows(ui, row_height, checkers.len(), |ui, row_range| {
+                for i in row_range {
+                    let checker = &checkers[i];
+                    let name = checker.service_name();
+                    let port = checker.default_port();
+                    let creds = checker.default_credentials();
+                    // Determine type and examples
+                    let tcp_http = ["FTP","ZooKeeper","MongoDB","LDAP","VNC","Memcached","NFS","Dubbo","Rsync","SMB","uWSGI","CouchDB","MySQL","Redis"];
+                    let svc_type = if tcp_http.contains(&name) { "TCP" } else { "HTTP" };
+                    let examples: Vec<String> = creds.iter().take(2).map(|c| c.display()).collect();
+                    let examples_str = examples.join(", ");
+                    let cred_count = creds.len();
+
+                    let bg = if (i % 2) == 0 { egui::Color32::from_black_alpha(5) } else { egui::Color32::TRANSPARENT };
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w, row_height), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 0.0, bg);
+
+                    let x0 = rect.min.x;
+                    let y0 = rect.min.y;
+                    ui.put(egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(col_w[0], row_height)), egui::Label::new(name).selectable(true));
+                    ui.put(egui::Rect::from_min_size(egui::pos2(x0 + col_w[0], y0), egui::vec2(col_w[1], row_height)), egui::Label::new(port.to_string()).selectable(true));
+                    ui.put(egui::Rect::from_min_size(egui::pos2(x0 + col_w[0] + col_w[1], y0), egui::vec2(col_w[2], row_height)), egui::Label::new(svc_type).selectable(true));
+                    ui.put(egui::Rect::from_min_size(egui::pos2(x0 + col_w[0] + col_w[1] + col_w[2], y0), egui::vec2(col_w[3], row_height)), egui::Label::new(cred_count.to_string()).selectable(true));
+                    ui.put(egui::Rect::from_min_size(egui::pos2(x0 + col_w[0] + col_w[1] + col_w[2] + col_w[3], y0), egui::vec2(col_w[4], row_height)), egui::Label::new(examples_str).selectable(true));
+                }
             });
     }
 

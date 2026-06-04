@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
             .iter()
             .map(|c| (c.service_name(), c.default_port()))
             .collect();
-        services.sort_by(|a, b| a.0.cmp(b.0));
+        services.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
         for (name, port) in services {
             println!("{:<20} {}", name, port);
         }

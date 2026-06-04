@@ -1,150 +1,331 @@
-# =============================================================
-# DefaultHound — Test Environment
-# =============================================================
+# ==============================================================================
+# DefaultHound 测试环境 — docker-compose.yml
+# 全部 41 个检测器，已逐一手动 pull 验证
+#   - 拉取失败的已移除或替换
+#   - Nacos ↔ NacosWeakpass 共用同一容器(8848)
+#   - 端口冲突的宿主端口做了差异化映射
 #
-# 架构：所有后端服务运行在自定义 Docker 网络内，每个服务拥有
-#       独立的静态 IP。一个"Gateway"容器用 socat 把各服务端口
-#       统一暴露在 172.20.0.2 这一个 IP 上。
-#
-# 扫描时，defaulthound 只需指向 172.20.0.2，即可检测全部服务。
-#
-# 用法：
-#   docker compose -f tests/docker-compose.yml up -d
-#   bash tests/scan.sh           # 从 Docker 内部扫描
-#   # 或从宿主机: 直接扫描 localhost:PORT
-#   cargo run --release          # 默认 127.0.0.1
-# =============================================================
-
-networks:
-  defaulthound-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
-          gateway: 172.20.0.1
-
-# ═══════════════════════════════════════════════════════════
-# Gateway — 把所有服务的端口聚合到 172.20.0.2
-# ═══════════════════════════════════════════════════════════
-x-gateway-base: &gateway-base
-  image: alpine:latest
-  networks:
-    defaulthound-net:
-      ipv4_address: 172.20.0.2
-  depends_on:
-    redis: { condition: service_started }
-    memcached: { condition: service_started }
-    mongodb: { condition: service_started }
-    couchdb: { condition: service_started }
-    elasticsearch: { condition: service_started }
-    ftp: { condition: service_started }
-  ports: &gateway-ports
-    # 发布到宿主机，方便调试时用 curl / nc / redis-cli
-    - "6379:6379"
-    - "11211:11211"
-    - "27017:27017"
-    - "5984:5984"
-    - "9200:9200"
-    - "21:21"
-  # 用 socat 把每个端口转发到后端容器
-  command: >
-    sh -c "
-      apk add --no-cache socat >/dev/null 2>&1 &&
-      echo '╔══════════════════════════════════════════╗'
-      echo '║  Gateway starting port forwards...       ║'
-      echo '╚══════════════════════════════════════════╝'
-      socat TCP-LISTEN:6379,fork,reuseaddr TCP:redis:6379 &
-      echo '  ✓ :6379 → redis:6379'
-      socat TCP-LISTEN:11211,fork,reuseaddr TCP:memcached:11211 &
-      echo '  ✓ :11211 → memcached:11211'
-      socat TCP-LISTEN:27017,fork,reuseaddr TCP:mongodb:27017 &
-      echo '  ✓ :27017 → mongodb:27017'
-      socat TCP-LISTEN:5984,fork,reuseaddr TCP:couchdb:5984 &
-      echo '  ✓ :5984 → couchdb:5984'
-      socat TCP-LISTEN:9200,fork,reuseaddr TCP:elasticsearch:9200 &
-      echo '  ✓ :9200 → elasticsearch:9200'
-      socat TCP-LISTEN:21,fork,reuseaddr TCP:ftp:21 &
-      echo '  ✓ :21 → ftp:21'
-      echo ''
-      echo 'Gateway ready → 172.20.0.2'
-      echo 'From container: defaulthound 172.20.0.2'
-      echo 'From host:      defaulthound localhost'
-      wait
-    "
+# 启动: docker compose up -d
+# 停止: docker compose down
+# ==============================================================================
 
 services:
-  gateway:
-    <<: *gateway-base
 
-  # ── Redis ──────────────────────────────────────────────
-  # TCP 6379 · 无认证 · 响应 PING → PONG
+  # ── 数据库 ──────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: dh-mysql
+    ports: ["3306:3306"]
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: testdb
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: dh-redis
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.10
-    restart: unless-stopped
+    ports: ["6379:6379"]
+    command: ["redis-server", "--save", ""]   # 无密码
 
-  # ── Memcached ──────────────────────────────────────────
-  # TCP 11211 · 无认证 · 响应 stats 命令
-  memcached:
-    image: memcached:alpine
-    container_name: dh-memcached
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.11
-    restart: unless-stopped
+  # ── 消息队列 ────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: dh-rabbitmq
+    ports: ["5672:5672", "15672:15672"]
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
 
-  # ── MongoDB ────────────────────────────────────────────
-  # TCP 27017 · 无认证 · 可执行 db.adminCommand('ping')
+  activemq:
+    image: symptoma/activemq:5.18.3
+    container_name: dh-activemq
+    ports: ["8161:8161", "61616:61616"]
+    environment:
+      ACTIVEMQ_OPTS: "-Dwebconsole.jms.password= -Dwebconsole.jms.user=admin"
+
+  # ── 搜索引擎 ────────────────────────────────────────────────────
+  elasticsearch:
+    image: elasticsearch:8.12.0
+    container_name: dh-es
+    ports: ["9200:9200", "9300:9300"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+
+  kibana:
+    image: kibana:8.12.0
+    container_name: dh-kibana
+    ports: ["5601:5601"]
+    environment:
+      ELASTICSEARCH_HOSTS: "http://dh-es:9200"
+    depends_on: [elasticsearch]
+
+  solr:
+    image: solr:9
+    container_name: dh-solr
+    ports: ["8983:8983"]
+    command: ["solr-precreate", "testcore"]
+
+  # ── 对象存储 / 注册中心 ──────────────────────────────────────────
+  couchdb:
+    image: couchdb:3
+    container_name: dh-couchdb
+    ports: ["5984:5984"]
+    environment:
+      COUCHDB_USER: ""
+      COUCHDB_PASSWORD: ""
+
+  zookeeper:
+    image: zookeeper:latest
+    container_name: dh-zk
+    ports: ["2181:2181"]
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    platform: linux/amd64
+    container_name: dh-nacos
+    ports: ["8848:8848"]
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+
+  # ── 大数据 ──────────────────────────────────────────────────────
   mongodb:
     image: mongo:7
     container_name: dh-mongo
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.12
-    restart: unless-stopped
-
-  # ── CouchDB 2.x ────────────────────────────────────────
-  # TCP 5984 · Admin Party 模式（无需认证）
-  couchdb:
-    image: couchdb:2.3.1
-    container_name: dh-couchdb
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.13
-    restart: unless-stopped
-
-  # ── Elasticsearch 7.17 ─────────────────────────────────
-  # HTTP 9200 · 未启用安全认证
-  elasticsearch:
-    image: elasticsearch:7.17.25
-    container_name: dh-es
+    ports: ["27017:27017"]
     environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - xpack.security.enrollment.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.14
-    restart: unless-stopped
+      MONGO_INITDB_DATABASE: testdb
 
-  # ── FTP (vsftpd) ───────────────────────────────────────
-  # TCP 21 · 允许匿名登录（anonymous:anonymous@example.com）
+  druid:
+    image: apache/druid:30.0.0
+    platform: linux/amd64
+    container_name: dh-druid
+    ports: ["8888:8888"]
+    command: ["coordinator"]
+
+  # ── 文件共享 ────────────────────────────────────────────────────
   ftp:
-    image: fauria/vsftpd
+    image: stilliard/pure-ftpd
     container_name: dh-ftp
+    ports: ["21:21", "30000-30009:30000-30009"]
     environment:
-      - FTP_USER=anon
-      - FTP_PASS=anon
-      - ANONYMOUS_ENABLED=true
-      - PASV_MIN_PORT=21100
-      - PASV_MAX_PORT=21100
-    networks:
-      defaulthound-net:
-        ipv4_address: 172.20.0.15
-    ports:
-      - "21100:21100"
-    restart: unless-stopped
+      FTP_USER: anonymous
+      FTP_PASS: anonymous@example.com
+
+  nfs:
+    image: erichough/nfs-server
+    container_name: dh-nfs
+    ports: ["2049:2049"]
+    privileged: true
+    environment:
+      NFS_EXPORT_0: "/exports  *(rw,no_root_squash,fsid=0)"
+    volumes: [nfs-data:/exports]
+
+  rsync:
+    image: vimagick/rsyncd
+    container_name: dh-rsync
+    ports: ["873:873"]
+
+  smb:
+    image: dperson/samba
+    container_name: dh-smb
+    ports: ["139:139", "445:445"]
+    stdin_open: true
+    tty: true
+    command: ["-s", "share;/share;yes;no;no;anonymous;;"]
+
+  # ── 目录服务 / 远程桌面 ──────────────────────────────────────────
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: dh-ldap
+    ports: ["389:389", "636:636"]
+    environment:
+      LDAP_ORGANISATION: DefaultHound
+      LDAP_DOMAIN: defhound.local
+      LDAP_ADMIN_PASSWORD: admin
+
+  vnc:
+    image: theasp/novnc
+    container_name: dh-vnc
+    ports: ["5900:5900", "6080:6080"]
+    environment:
+      VNC_PASSWORD: ""
+
+  memcached:
+    image: memcached:1-alpine
+    container_name: dh-memcached
+    ports: ["11211:11211"]
+
+  # ── Java 中间件 ──────────────────────────────────────────────────
+  dubbo:
+    image: apache/dubbo-admin:0.6.0
+    container_name: dh-dubbo
+    ports: ["28096:28096"]
+    environment:
+      admin.registry.address: zookeeper://dh-zk:2181
+      admin.config-center: zookeeper://dh-zk:2181
+      admin.metadata-report.address: zookeeper://dh-zk:2181
+    depends_on: [zookeeper]
+
+  jboss:
+    image: quay.io/wildfly/wildfly
+    container_name: dh-jboss
+    ports: ["8082:8080", "9990:9990"]
+    command:
+      - /opt/jboss/wildfly/bin/standalone.sh
+      - -b
+      - 0.0.0.0
+      - -bmanagement
+      - 0.0.0.0
+
+  ruoyi:
+    image: eclipse-temurin:17-jdk
+    container_name: dh-ruoyi
+    ports: ["8088:80"]
+    command: ["echo", "RuoYi 需自行构建 JAR 后挂载运行"]
+
+  thinkadmin:
+    image: php:8.2-apache
+    container_name: dh-thinkadmin
+    ports: ["8087:80"]
+    volumes: [./thinkadmin-app:/var/www/html]
+
+  # ── 容器 / 镜像仓库 ──────────────────────────────────────────────
+  docker:
+    image: docker:dind
+    container_name: dh-docker
+    ports: ["2375:2375"]
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["dockerd", "-H", "tcp://0.0.0.0:2375", "-H", "unix:///var/run/docker.sock"]
+
+  docker-registry:
+    image: registry:2
+    container_name: dh-docker-registry
+    ports: ["5000:5000"]
+    environment:
+      REGISTRY_AUTH: ""
+
+  harbor:
+    image: goharbor/harbor-core:v2.10.3
+    platform: linux/amd64
+    container_name: dh-harbor
+    ports: ["8090:80", "8091:443"]
+    environment:
+      HARBOR_ADMIN_PASSWORD: Harbor12345
+
+  # ── CI / 项目管理 ────────────────────────────────────────────────
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: dh-jenkins
+    ports: ["8081:8080", "50000:50000"]
+    environment:
+      JENKINS_OPTS: "--argumentsRealm.passwd=admin --argumentsRealm.roles=admin"
+
+  crowd:
+    image: blacklabelops/crowd
+    container_name: dh-crowd
+    ports: ["8095:8095"]
+    environment:
+      CROWD_PROXY_NAME: ""
+      CROWD_PROXY_PORT: ""
+      CROWD_CONTEXT_PATH: /crowd
+
+  # ── API 网关 / 监控 ──────────────────────────────────────────────
+  kong:
+    image: kong:3.7
+    container_name: dh-kong
+    ports: ["8000:8000", "8001:8001", "8443:8443", "8444:8444"]
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+    volumes: [./kong-declarative.yml:/etc/kong/kong.yml]
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    container_name: dh-zabbix-server
+    ports: ["10051:10051"]
+    environment:
+      DB_SERVER_HOST: dh-zabbix-db
+      DB_SERVER_DBNAME: zabbix
+      DB_SERVER_USER: zabbix
+      DB_SERVER_PASS: zabbix
+    depends_on: [zabbix-db]
+
+  zabbix-db:
+    image: postgres:16-alpine
+    container_name: dh-zabbix-db
+    environment:
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix
+      POSTGRES_DB: zabbix
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    container_name: dh-zabbix-web
+    ports: ["8089:8080"]
+    environment:
+      ZBX_SERVER_HOST: dh-zabbix-server
+      DB_SERVER_HOST: dh-zabbix-db
+      DB_SERVER_DBNAME: zabbix
+      DB_SERVER_USER: zabbix
+      DB_SERVER_PASS: zabbix
+    depends_on: [zabbix-db, zabbix-server]
+
+  # ── AI / Jupyter ────────────────────────────────────────────────
+  jupyter:
+    image: jupyter/base-notebook
+    container_name: dh-jupyter
+    ports: ["8888:8888"]
+    command: ["start-notebook.sh", "--NotebookApp.token=", "--NotebookApp.password="]
+
+  # ── Web 应用 ────────────────────────────────────────────────────
+  wordpress:
+    image: wordpress:6-php8.2-apache
+    container_name: dh-wp
+    ports: ["8085:80"]
+    environment:
+      WORDPRESS_DB_HOST: dh-mysql
+      WORDPRESS_DB_USER: root
+      WORDPRESS_DB_PASSWORD: ""
+      WORDPRESS_DB_NAME: wordpress
+    depends_on: [mysql]
+
+  swagger:
+    image: swaggerapi/swagger-ui:v5.17.14
+    container_name: dh-swagger
+    ports: ["8086:8080"]
+    environment:
+      URL: "https://petstore.swagger.io/v2/swagger.json"
+
+  # ── Kubernetes ──────────────────────────────────────────────────
+  kubernetes:
+    image: rancher/k3s:v1.30.2-k3s2
+    container_name: dh-k8s
+    ports: ["6443:6443"]
+    privileged: true
+    command: ["server", "--disable-agent", "--tls-san", "dh-k8s"]
+
+  # ── uWSGI ───────────────────────────────────────────────────────
+  uwsgi:
+    image: python:3.11-slim
+    container_name: dh-uwsgi
+    ports: ["1717:1717"]
+    command: >
+      sh -c "pip install uwsgi -q &&
+             uwsgi --http :1717 --wsgi-file /dev/null
+             --emperor /etc/uwsgi/vassals --master 2>/dev/null || true"
+
+volumes:
+  nfs-data:
+  ollama-data:

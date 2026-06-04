@@ -1,0 +1,8 @@
+_format_version: "3.0"
+services:
+  - name: test-service
+    url: http://httpbin.org
+    routes:
+      - name: test-route
+        paths:
+          - /

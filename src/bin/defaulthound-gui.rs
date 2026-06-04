@@ -195,9 +195,18 @@ impl DefaultHoundApp {
                         }
                     }
                     let check_ports = if ports.is_empty() {
+                        // 没有指定端口 → 使用 checker 的默认端口
                         vec![checker.default_port()]
-                    } else {
+                    } else if service_filter.is_some() {
+                        // 显式指定了服务 + 端口 → 使用指定的端口
                         ports.clone()
+                    } else {
+                        // 指定了端口但没指定服务 → 只运行默认端口匹配的 checker
+                        if ports.contains(&checker.default_port()) {
+                            vec![checker.default_port()]
+                        } else {
+                            continue;
+                        }
                     };
                     for port in check_ports {
                         let ip = ip.clone();
@@ -509,6 +518,26 @@ impl eframe::App for DefaultHoundApp {
                     }
                     if ui.button("Clear").clicked() {
                         self.targets.clear();
+                    }
+                    if ui.button("Load").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Text", &["txt", "csv", "lst"])
+                            .set_file_name("targets.txt")
+                            .pick_file()
+                        {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                self.targets.clear();
+                                for line in content.lines() {
+                                    let line = line.trim();
+                                    if !line.is_empty() && !line.starts_with('#') {
+                                        self.targets.push(TargetRow {
+                                            raw: line.to_string(),
+                                            enabled: true,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
                 });
 

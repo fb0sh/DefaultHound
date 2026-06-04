@@ -238,23 +238,26 @@ async fn main() -> anyhow::Result<()> {
             let q = query.to_lowercase();
             all.iter().filter(|e| {
                 e.vendor.to_lowercase().contains(&q)
+                    || e.version.to_lowercase().contains(&q)
                     || e.username.to_lowercase().contains(&q)
                     || e.password.to_lowercase().contains(&q)
             }).collect()
         };
 
         println!("Default Credentials ({} matched)", matched.len());
-        println!("{}", "─".repeat(80));
-        println!("{:<30} {:<22} {:<22}", "Vendor / Product", "Username", "Password");
-        println!("{}", "─".repeat(80));
+        println!("{}", "─".repeat(100));
+        println!("{:<30} {:<18} {:<22} {:<22}", "Vendor / Product", "Version", "Username", "Password");
+        println!("{}", "─".repeat(100));
         for entry in matched {
+            let vers = if entry.version.is_empty() { "-" } else { entry.version };
             let user = if entry.username.is_empty() { "<blank>" } else { entry.username };
             let pass = if entry.password.is_empty() { "<blank>" } else { entry.password };
             // Truncate long fields
             let v = if entry.vendor.len() > 28 { format!("{}..", &entry.vendor[..28]) } else { entry.vendor.to_string() };
+            let s = if vers.len() > 16 { format!("{}..", &vers[..16]) } else { vers.to_string() };
             let u = if user.len() > 20 { format!("{}..", &user[..20]) } else { user.to_string() };
             let p = if pass.len() > 20 { format!("{}..", &pass[..20]) } else { pass.to_string() };
-            println!("{:<30} {:<22} {:<22}", v, u, p);
+            println!("{:<30} {:<18} {:<22} {:<22}", v, s, u, p);
         }
         return Ok(());
     }

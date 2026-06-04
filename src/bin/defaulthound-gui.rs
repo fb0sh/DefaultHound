@@ -928,6 +928,7 @@ impl DefaultHoundApp {
                 .iter()
                 .filter(|e| {
                     e.vendor.to_lowercase().contains(&search_lower)
+                        || e.version.to_lowercase().contains(&search_lower)
                         || e.username.to_lowercase().contains(&search_lower)
                         || e.password.to_lowercase().contains(&search_lower)
                 })
@@ -941,7 +942,7 @@ impl DefaultHoundApp {
         // 表格（虚拟化，只渲染可见行）
         let row_height = 20.0;
         let avail_w = ui.available_width();
-        let col_w = [avail_w * 0.38, avail_w * 0.30, avail_w * 0.30];
+        let col_w = [avail_w * 0.32, avail_w * 0.16, avail_w * 0.26, avail_w * 0.26];
 
         // 表头（固定，不在 scroll 区内）
         ui.horizontal(|ui| {
@@ -954,10 +955,15 @@ impl DefaultHoundApp {
             ui.allocate_ui_with_layout(
                 egui::vec2(col_w[1], row_height),
                 egui::Layout::left_to_right(egui::Align::Center),
-                |ui| { ui.strong("Username"); },
+                |ui| { ui.strong("Version"); },
             );
             ui.allocate_ui_with_layout(
                 egui::vec2(col_w[2], row_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| { ui.strong("Username"); },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w[3], row_height),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| { ui.strong("Password"); },
             );
@@ -995,14 +1001,12 @@ impl DefaultHoundApp {
                     let x0 = rect.min.x;
                     let y0 = rect.min.y;
                     let vend = entry.vendor;
+                    let vers = entry.version;
                     let user = display_user;
                     let pass = display_pass;
 
                     let r1 = ui.put(
-                        egui::Rect::from_min_size(
-                            egui::pos2(x0, y0),
-                            egui::vec2(col_w[0], row_height),
-                        ),
+                        egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(col_w[0], row_height)),
                         egui::Label::new(vend).selectable(true),
                     );
                     r1.context_menu(move |ui| {
@@ -1012,11 +1016,19 @@ impl DefaultHoundApp {
                         }
                     });
 
+                    let rv = ui.put(
+                        egui::Rect::from_min_size(egui::pos2(x0 + col_w[0], y0), egui::vec2(col_w[1], row_height)),
+                        egui::Label::new(vers).selectable(true),
+                    );
+                    rv.context_menu(move |ui| {
+                        if ui.button("Copy version").clicked() {
+                            ui.ctx().copy_text(vers.to_string());
+                            ui.close_menu();
+                        }
+                    });
+
                     let r2 = ui.put(
-                        egui::Rect::from_min_size(
-                            egui::pos2(x0 + col_w[0], y0),
-                            egui::vec2(col_w[1], row_height),
-                        ),
+                        egui::Rect::from_min_size(egui::pos2(x0 + col_w[0] + col_w[1], y0), egui::vec2(col_w[2], row_height)),
                         egui::Label::new(user).selectable(true),
                     );
                     r2.context_menu(move |ui| {
@@ -1027,10 +1039,7 @@ impl DefaultHoundApp {
                     });
 
                     let r3 = ui.put(
-                        egui::Rect::from_min_size(
-                            egui::pos2(x0 + col_w[0] + col_w[1], y0),
-                            egui::vec2(col_w[2], row_height),
-                        ),
+                        egui::Rect::from_min_size(egui::pos2(x0 + col_w[0] + col_w[1] + col_w[2], y0), egui::vec2(col_w[3], row_height)),
                         egui::Label::new(pass).selectable(true),
                     );
                     r3.context_menu(move |ui| {

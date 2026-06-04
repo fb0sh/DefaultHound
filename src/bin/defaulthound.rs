@@ -86,6 +86,10 @@ struct Cli {
     /// 仅显示高危结果
     #[arg(short = 'v', long = "vuln")]
     vuln_only: bool,
+
+    /// 代理地址 (socks5://... 或 http://...)
+    #[arg(short = 'p', long = "proxy")]
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +223,11 @@ async fn main() -> anyhow::Result<()> {
             println!("{:<20} {}", name, port);
         }
         return Ok(());
+    }
+
+    // 设置代理
+    if let Some(ref proxy_url) = cli.proxy {
+        defaulthound::set_global_proxy(proxy_url);
     }
 
     if targets.is_empty() {

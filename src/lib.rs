@@ -3,8 +3,41 @@ pub mod prelude;
 
 use async_trait::async_trait;
 use std::borrow::Cow;
+use std::sync::Mutex;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::time::{Duration, timeout};
+
+/// 全局代理配置
+static GLOBAL_PROXY: Mutex<Option<String>> = Mutex::new(None);
+
+/// 设置全局代理 URL
+///
+/// 支持格式:
+/// - `socks5://127.0.0.1:1080`  — SOCKS5 代理（TCP + HTTP）
+/// - `socks5h://127.0.0.1:1080` — SOCKS5 with remote DNS
+/// - `http://127.0.0.1:8080`     — HTTP 代理（仅 HTTP 检查器）
+pub fn set_global_proxy(url: &str) {
+    if let Ok(mut p) = GLOBAL_PROXY.lock() {
+        *p = Some(url.to_string());
+    }
+}
+
+/// 获取全局代理 URL
+pub fn get_global_proxy() -> Option<String> {
+    GLOBAL_PROXY.lock().ok().and_then(|p| p.clone())
+}
+
+/// 清除全局代理
+pub fn clear_global_proxy() {
+    if let Ok(mut p) = GLOBAL_PROXY.lock() {
+        *p = None;
+    }
+}
+
+/// 组合流 trait：代理感知的 TCP 流
+pub trait ProxyAwareStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ProxyAwareStream for T {}
 
 /// 一组登录凭据
 #[derive(Debug, Clone)]
@@ -75,14 +108,40 @@ pub trait ServiceChecker: Send + Sync {
         Vec::new()
     }
 
-    /// 尝试 TCP 连接目标 (默认实现，checker 可直接调用)
-    /// Err 中直接包装 CheckResult，调用方无需手动转换
-    async fn try_tcp_connect(&self, ip: &str, port: u16) -> Result<TcpStream, CheckResult> {
+    /// 尝试 TCP 连接目标。
+    ///
+    /// 如果设置了全局代理（SOCKS5），自动通过代理连接。
+    /// Err 中直接包装 CheckResult，调用方无需手动转换。
+    async fn try_tcp_connect(
+        &self,
+        ip: &str,
+        port: u16,
+    ) -> Result<Box<dyn ProxyAwareStream>, CheckResult> {
         let target = format!("{}:{}", ip, port);
+
+        // 如果设置了 SOCKS5 代理，通过代理连接
+        if let Some(proxy_url) = get_global_proxy() {
+            if proxy_url.starts_with("socks5") {
+                return match timeout(
+                    Duration::from_secs(5),
+                    tokio_socks::tcp::socks5::Socks5Stream::connect(proxy_url.as_str(), target.clone()),
+                )
+                .await
+                {
+                    Ok(Ok(stream)) => Ok(Box::new(stream)),
+                    Ok(Err(e)) => Err(CheckResult::Error(format!("代理连接失败: {}", e))),
+                    Err(_) => Err(CheckResult::Error("代理连接超时".to_string())),
+                };
+            }
+            // 非 socks 代理（如 http proxy）则直连 TCP，HTTP 检查器会处理代理
+        }
+
+        // 默认：直连
         timeout(Duration::from_secs(3), TcpStream::connect(&target))
             .await
             .map_err(|_| CheckResult::Secure("连接超时".to_string()))?
             .map_err(|e| CheckResult::Secure(format!("端口未开放: {}", e)))
+            .map(|s| Box::new(s) as Box<dyn ProxyAwareStream>)
     }
 
     /// 执行安全检查。

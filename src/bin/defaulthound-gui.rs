@@ -95,6 +95,11 @@ pub struct DefaultHoundApp {
     // ── 主题 ──
     dark_mode: bool,
 
+    // ── 代理 ──
+    proxy_url: Option<String>,
+    show_proxy_input: bool,
+    proxy_input_buffer: String,
+
     // UI 线程缓存
     cached_results: Vec<ScanEntry>,
     cached_progress: (usize, usize),
@@ -115,6 +120,9 @@ impl DefaultHoundApp {
             vuln_only: false,
             search_text: String::new(),
             dark_mode: false,
+            proxy_url: None,
+            show_proxy_input: false,
+            proxy_input_buffer: String::new(),
             cached_results: vec![],
             cached_progress: (0, 0),
             cached_scanning: false,
@@ -449,6 +457,19 @@ impl eframe::App for DefaultHoundApp {
                         if ui.button(label).on_hover_text("Toggle theme").clicked() {
                             self.dark_mode = !self.dark_mode;
                         }
+
+                        ui.separator();
+                        if ui.button("Proxy").on_hover_text("设置代理").clicked() {
+                            self.proxy_input_buffer = self.proxy_url.clone().unwrap_or_default();
+                            self.show_proxy_input = !self.show_proxy_input;
+                        }
+                        if let Some(ref proxy) = self.proxy_url {
+                            ui.label(proxy);
+                            if ui.button("x").on_hover_text("清除代理").clicked() {
+                                self.proxy_url = None;
+                                defaulthound::clear_global_proxy();
+                            }
+                        }
                     });
                 });
             });
@@ -623,10 +644,52 @@ impl eframe::App for DefaultHoundApp {
                             .prefix(" ")
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label("DefaultHound v0.8.0 | <fb0sh@outlook.com> https://github.com/fb0sh/DefaultHound");
+                        ui.label(format!("DefaultHound v{} | <fb0sh@outlook.com> https://github.com/fb0sh/DefaultHound", env!("CARGO_PKG_VERSION")));
                     });
                 });
             });
+
+        // ── 代理设置弹窗 ──
+        if self.show_proxy_input {
+            egui::Window::new("Proxy Settings")
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([380.0, 140.0])
+                .show(ctx, |ui| {
+                    ui.label("代理地址：");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.proxy_input_buffer)
+                            .hint_text("socks5://127.0.0.1:1080")
+                            .desired_width(340.0),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("socks5:// — TCP + HTTP 检查器全走代理")
+                            .size(11.0)
+                            .color(egui::Color32::GRAY),
+                    );
+                    ui.label(
+                        egui::RichText::new("http://  — 仅 HTTP 检查器走代理，TCP 检查器直连")
+                            .size(11.0)
+                            .color(egui::Color32::GRAY),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let saved = ui.button("保存").clicked();
+                        let canceled = ui.button("取消").clicked();
+                        if saved {
+                            let trimmed = self.proxy_input_buffer.trim().to_string();
+                            if !trimmed.is_empty() {
+                                self.proxy_url = Some(trimmed.clone());
+                                defaulthound::set_global_proxy(&trimmed);
+                            }
+                            self.show_proxy_input = false;
+                        }
+                        if canceled {
+                            self.show_proxy_input = false;
+                        }
+                    });
+                });
+        }
     }
 }
 
@@ -789,7 +852,7 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("DefaultHound v0.8.0"),
+            .with_title(format!("DefaultHound v{}", env!("CARGO_PKG_VERSION"))),
         ..Default::default()
     };
 

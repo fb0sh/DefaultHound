@@ -1,5 +1,21 @@
 use crate::CheckResult;
 
+/// 创建代理感知的 reqwest Client
+fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none());
+
+    // 如果设置了全局代理，添加到客户端
+    if let Some(ref proxy_url) = crate::get_global_proxy() {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+
+    builder.build()
+}
+
 pub async fn http_get_check(
     ip: &str,
     port: u16,
@@ -9,10 +25,7 @@ pub async fn http_get_check(
     service: &str,
 ) -> CheckResult {
     let url = format!("http://{}:{}{}", ip, port, path);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+    let client = match build_http_client()
     {
         Ok(c) => c,
         Err(e) => return CheckResult::Error(format!("创建 HTTP 客户端失败: {}", e)),

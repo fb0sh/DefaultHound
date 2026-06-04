@@ -49,6 +49,8 @@ defaulthound-gui
 <img width="1570" height="943" alt="image" src="https://github.com/user-attachments/assets/b8f6f2fa-dd4c-48d6-91ae-052768fc18c2" />
 
 
+<img width="1459" height="833" alt="image" src="https://github.com/user-attachments/assets/4732347b-46e2-41d4-85e1-0c3e102b72b1" />
+
 
 ### 功能特性
 

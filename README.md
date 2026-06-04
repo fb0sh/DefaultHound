@@ -58,6 +58,7 @@ defaulthound-gui
 | **搜索过滤** | 按服务名、IP、端口搜索；"Vulns only" 仅显示漏洞 |
 | **导出 CSV** | 一键导出扫描结果到 CSV 文件 |
 | **亮色/暗色** | 顶部控制栏一键切换 Light / Night 主题 |
+| **代理设置** | 内置弹窗设置 SOCKS5/HTTP 代理，支持保存/清除 |
 | **扫描控制** | 开始扫描 / 停止扫描 |
 | **清除结果** | 一键清空扫描结果 |
 
@@ -112,6 +113,12 @@ defaulthound -f targets.txt -r 100
 
 # 仅显示高危结果
 defaulthound -f targets.txt -v
+
+# 通过代理扫描
+defaulthound -f targets.txt -p socks5://127.0.0.1:1080
+
+# HTTP 代理
+defaulthound 192.168.1.1 --proxy http://proxy:8080
 ```
 
 ### 目标格式

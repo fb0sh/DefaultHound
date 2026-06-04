@@ -90,6 +90,10 @@ struct Cli {
     /// 代理地址 (socks5://... 或 http://...)
     #[arg(short = 'p', long = "proxy")]
     proxy: Option<String>,
+
+    /// 显示默认凭据表，可选搜索关键词
+    #[arg(long, num_args = 0..=1, default_missing_value = "")]
+    show: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +225,36 @@ async fn main() -> anyhow::Result<()> {
         services.sort_by(|a, b| a.0.cmp(b.0));
         for (name, port) in services {
             println!("{:<20} {}", name, port);
+        }
+        return Ok(());
+    }
+
+    // ── 显示默认凭据表 ──
+    if let Some(query) = cli.show {
+        let all = defaulthound::default_creds::get_all();
+        let matched: Vec<_> = if query.is_empty() {
+            all.iter().collect()
+        } else {
+            let q = query.to_lowercase();
+            all.iter().filter(|e| {
+                e.vendor.to_lowercase().contains(&q)
+                    || e.username.to_lowercase().contains(&q)
+                    || e.password.to_lowercase().contains(&q)
+            }).collect()
+        };
+
+        println!("Default Credentials ({} matched)", matched.len());
+        println!("{}", "─".repeat(80));
+        println!("{:<30} {:<22} {:<22}", "Vendor / Product", "Username", "Password");
+        println!("{}", "─".repeat(80));
+        for entry in matched {
+            let user = if entry.username.is_empty() { "<blank>" } else { entry.username };
+            let pass = if entry.password.is_empty() { "<blank>" } else { entry.password };
+            // Truncate long fields
+            let v = if entry.vendor.len() > 28 { format!("{}..", &entry.vendor[..28]) } else { entry.vendor.to_string() };
+            let u = if user.len() > 20 { format!("{}..", &user[..20]) } else { user.to_string() };
+            let p = if pass.len() > 20 { format!("{}..", &pass[..20]) } else { pass.to_string() };
+            println!("{:<30} {:<22} {:<22}", v, u, p);
         }
         return Ok(());
     }

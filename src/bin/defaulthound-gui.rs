@@ -9,12 +9,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use defaulthound::CheckResult;
 use defaulthound::checkers;
+use defaulthound::default_creds::CredEntry;
 
 // ─────────────────────────────────────────────
 // 共享扫描状态（跨线程）
@@ -71,6 +73,7 @@ fn timestamp() -> String {
 enum ViewMode {
     Log,
     VulnTable,
+    DefaultCreds,
 }
 
 struct TargetRow {
@@ -100,6 +103,9 @@ pub struct DefaultHoundApp {
     show_proxy_input: bool,
     proxy_input_buffer: String,
 
+    // DefaultCreds 搜索
+    default_creds_search: RefCell<String>,
+
     // UI 线程缓存
     cached_results: Vec<ScanEntry>,
     cached_progress: (usize, usize),
@@ -123,6 +129,7 @@ impl DefaultHoundApp {
             proxy_url: None,
             show_proxy_input: false,
             proxy_input_buffer: String::new(),
+            default_creds_search: RefCell::new(String::new()),
             cached_results: vec![],
             cached_progress: (0, 0),
             cached_scanning: false,
@@ -383,101 +390,122 @@ impl eframe::App for DefaultHoundApp {
         egui::TopBottomPanel::top("control_bar")
             .min_height(40.0)
             .show(ctx, |ui| {
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if self.cached_scanning {
-                            ui.spinner();
-                            ui.label("Scanning...");
-                            if ui.button("Stop").clicked() {
-                                self.stop_scan();
-                            }
-                        } else {
-                            if ui.button("> Start Scan").clicked() {
-                                self.start_scan();
-                            }
-                        }
-
-                        ui.separator();
-
-                        let log_label = format!("Log ({})", self.cached_results.len());
-                        if ui
-                            .selectable_label(self.view_mode == ViewMode::Log, log_label)
-                            .clicked()
-                        {
-                            self.view_mode = ViewMode::Log;
-                        }
-                        let vc = self.vuln_results().count();
-                        let vuln_label = format!("Vulns ({vc})");
-                        if ui
-                            .selectable_label(self.view_mode == ViewMode::VulnTable, vuln_label)
-                            .clicked()
-                        {
-                            self.view_mode = ViewMode::VulnTable;
-                        }
-
-                        ui.separator();
-
-                        if ui.button("Clear").clicked() {
-                            self.cached_results.clear();
-                            self.scan_state.results.lock().unwrap().clear();
-                            self.scan_state.progress_current.store(0, Ordering::Release);
-                            self.scan_state.progress_total.store(0, Ordering::Release);
-                        }
-                        if ui.button("Export CSV").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("CSV", &["csv"])
-                                .set_file_name("defaulthound_results.csv")
-                                .save_file()
-                            {
-                                let results = self.cached_results.clone();
-                                if let Ok(mut wtr) = csv::Writer::from_path(&path) {
-                                    let _ = wtr.write_record([
-                                        "service",
-                                        "ip",
-                                        "port",
-                                        "status",
-                                        "detail",
-                                        "vulnerable",
-                                    ]);
-                                    for e in &results {
-                                        let _ = wtr.write_record([
-                                            &e.service,
-                                            &e.ip,
-                                            &e.port.to_string(),
-                                            e.status,
-                                            &e.detail,
-                                            &e.vulnerable.to_string(),
-                                        ]);
+                ui.horizontal(|ui| {
+                    // 左侧：可横向滚动的按钮组
+                    egui::ScrollArea::horizontal()
+                        .id_salt("control_left")
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if self.cached_scanning {
+                                    ui.spinner();
+                                    ui.label("Scanning...");
+                                    if ui.button("Stop").clicked() {
+                                        self.stop_scan();
                                     }
-                                    let _ = wtr.flush();
+                                } else {
+                                    if ui.button("> Start Scan").clicked() {
+                                        self.start_scan();
+                                    }
                                 }
-                            }
-                        }
 
-                        ui.toggle_value(&mut self.vuln_only, "Vulns only");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.search_text)
-                                .hint_text("Search...")
-                                .desired_width(150.0),
-                        );
+                                ui.separator();
 
+                                let log_label = format!("Log ({})", self.cached_results.len());
+                                if ui
+                                    .selectable_label(self.view_mode == ViewMode::Log, log_label)
+                                    .clicked()
+                                {
+                                    self.view_mode = ViewMode::Log;
+                                }
+                                let vc = self.vuln_results().count();
+                                let vuln_label = format!("Vulns ({vc})");
+                                if ui
+                                    .selectable_label(
+                                        self.view_mode == ViewMode::VulnTable,
+                                        vuln_label,
+                                    )
+                                    .clicked()
+                                {
+                                    self.view_mode = ViewMode::VulnTable;
+                                }
+
+                                ui.separator();
+
+                                if ui.button("Clear").clicked() {
+                                    self.cached_results.clear();
+                                    self.scan_state.results.lock().unwrap().clear();
+                                    self.scan_state.progress_current.store(0, Ordering::Release);
+                                    self.scan_state.progress_total.store(0, Ordering::Release);
+                                }
+                                if ui.button("Export CSV").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("CSV", &["csv"])
+                                        .set_file_name("defaulthound_results.csv")
+                                        .save_file()
+                                    {
+                                        let results = self.cached_results.clone();
+                                        if let Ok(mut wtr) = csv::Writer::from_path(&path) {
+                                            let _ = wtr.write_record([
+                                                "service",
+                                                "ip",
+                                                "port",
+                                                "status",
+                                                "detail",
+                                                "vulnerable",
+                                            ]);
+                                            for e in &results {
+                                                let _ = wtr.write_record([
+                                                    &e.service,
+                                                    &e.ip,
+                                                    &e.port.to_string(),
+                                                    e.status,
+                                                    &e.detail,
+                                                    &e.vulnerable.to_string(),
+                                                ]);
+                                            }
+                                            let _ = wtr.flush();
+                                        }
+                                    }
+                                }
+
+                                ui.toggle_value(&mut self.vuln_only, "Vulns only");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.search_text)
+                                        .hint_text("Search...")
+                                        .desired_width(150.0),
+                                );
+
+                                ui.separator();
+                                let label = if self.dark_mode { "Night" } else { "Light" };
+                                if ui.button(label).on_hover_text("Toggle theme").clicked() {
+                                    self.dark_mode = !self.dark_mode;
+                                }
+
+                                ui.separator();
+                                if ui.button("Proxy").on_hover_text("设置代理").clicked() {
+                                    self.proxy_input_buffer =
+                                        self.proxy_url.clone().unwrap_or_default();
+                                    self.show_proxy_input = !self.show_proxy_input;
+                                }
+                                if let Some(ref proxy) = self.proxy_url {
+                                    ui.label(proxy);
+                                    if ui.button("x").on_hover_text("清除代理").clicked() {
+                                        self.proxy_url = None;
+                                        defaulthound::clear_global_proxy();
+                                    }
+                                }
+                            });
+                        });
+
+                    // 右侧：DefaultCreds 顶到最右边
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.separator();
-                        let label = if self.dark_mode { "Night" } else { "Light" };
-                        if ui.button(label).on_hover_text("Toggle theme").clicked() {
-                            self.dark_mode = !self.dark_mode;
-                        }
-
-                        ui.separator();
-                        if ui.button("Proxy").on_hover_text("设置代理").clicked() {
-                            self.proxy_input_buffer = self.proxy_url.clone().unwrap_or_default();
-                            self.show_proxy_input = !self.show_proxy_input;
-                        }
-                        if let Some(ref proxy) = self.proxy_url {
-                            ui.label(proxy);
-                            if ui.button("x").on_hover_text("清除代理").clicked() {
-                                self.proxy_url = None;
-                                defaulthound::clear_global_proxy();
-                            }
+                        let creds_label = "DefaultCreds";
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::DefaultCreds, creds_label)
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::DefaultCreds;
                         }
                     });
                 });
@@ -645,6 +673,7 @@ impl eframe::App for DefaultHoundApp {
         egui::CentralPanel::default().show(ctx, |ui| match self.view_mode {
             ViewMode::Log => self.show_log_view(ui),
             ViewMode::VulnTable => self.show_vuln_table(ui),
+            ViewMode::DefaultCreds => self.show_default_creds(ui),
         });
 
         // ── 底部状态栏 ──
@@ -868,6 +897,149 @@ impl DefaultHoundApp {
                             });
                         }
                     });
+            });
+    }
+
+    fn show_default_creds(&self, ui: &mut egui::Ui) {
+        let creds = defaulthound::default_creds::get_all();
+
+        ui.horizontal(|ui| {
+            ui.heading("Default Credentials");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(format!("Total: {}", creds.len()));
+            });
+        });
+        ui.add_space(4.0);
+
+        // 搜索框
+        let mut search = self.default_creds_search.borrow_mut();
+        ui.add(
+            egui::TextEdit::singleline(&mut *search)
+                .hint_text("Search vendor / username / password...")
+                .desired_width(f32::INFINITY),
+        );
+        let search_lower = search.to_lowercase();
+
+        // 收集匹配行
+        let matched: Vec<&CredEntry> = if search_lower.is_empty() {
+            creds.iter().collect()
+        } else {
+            creds
+                .iter()
+                .filter(|e| {
+                    e.vendor.to_lowercase().contains(&search_lower)
+                        || e.username.to_lowercase().contains(&search_lower)
+                        || e.password.to_lowercase().contains(&search_lower)
+                })
+                .collect()
+        };
+
+        ui.add_space(4.0);
+        ui.label(format!("Matched: {}", matched.len()));
+        ui.add_space(4.0);
+
+        // 表格（虚拟化，只渲染可见行）
+        let row_height = 20.0;
+        let avail_w = ui.available_width();
+        let col_w = [avail_w * 0.38, avail_w * 0.30, avail_w * 0.30];
+
+        // 表头（固定，不在 scroll 区内）
+        ui.horizontal(|ui| {
+            ui.set_height(row_height);
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w[0], row_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| { ui.strong("Vendor / Product"); },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w[1], row_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| { ui.strong("Username"); },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w[2], row_height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| { ui.strong("Password"); },
+            );
+        });
+        ui.separator();
+
+        // 数据行
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show_rows(ui, row_height, matched.len(), |ui, row_range| {
+                for i in row_range {
+                    let entry = matched[i];
+                    let display_user = if entry.username.is_empty() {
+                        "<blank>"
+                    } else {
+                        entry.username
+                    };
+                    let display_pass = if entry.password.is_empty() {
+                        "<blank>"
+                    } else {
+                        entry.password
+                    };
+
+                    let bg = if (i % 2) == 0 {
+                        egui::Color32::from_black_alpha(5)
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(avail_w, row_height),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(rect, 0.0, bg);
+
+                    let x0 = rect.min.x;
+                    let y0 = rect.min.y;
+                    let vend = entry.vendor;
+                    let user = display_user;
+                    let pass = display_pass;
+
+                    let r1 = ui.put(
+                        egui::Rect::from_min_size(
+                            egui::pos2(x0, y0),
+                            egui::vec2(col_w[0], row_height),
+                        ),
+                        egui::Label::new(vend).selectable(true),
+                    );
+                    r1.context_menu(move |ui| {
+                        if ui.button("Copy vendor").clicked() {
+                            ui.ctx().copy_text(vend.to_string());
+                            ui.close_menu();
+                        }
+                    });
+
+                    let r2 = ui.put(
+                        egui::Rect::from_min_size(
+                            egui::pos2(x0 + col_w[0], y0),
+                            egui::vec2(col_w[1], row_height),
+                        ),
+                        egui::Label::new(user).selectable(true),
+                    );
+                    r2.context_menu(move |ui| {
+                        if ui.button("Copy username").clicked() {
+                            ui.ctx().copy_text(user.to_string());
+                            ui.close_menu();
+                        }
+                    });
+
+                    let r3 = ui.put(
+                        egui::Rect::from_min_size(
+                            egui::pos2(x0 + col_w[0] + col_w[1], y0),
+                            egui::vec2(col_w[2], row_height),
+                        ),
+                        egui::Label::new(pass).selectable(true),
+                    );
+                    r3.context_menu(move |ui| {
+                        if ui.button("Copy password").clicked() {
+                            ui.ctx().copy_text(pass.to_string());
+                            ui.close_menu();
+                        }
+                    });
+                }
             });
     }
 }

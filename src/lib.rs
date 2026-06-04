@@ -1,4 +1,5 @@
 pub mod checkers;
+pub mod default_creds;
 pub mod prelude;
 
 use async_trait::async_trait;
@@ -56,6 +57,8 @@ impl Credential {
             password: password.into(),
         }
     }
+
+    /// 格式化显示
 
     pub fn display(&self) -> String {
         format!("{}:{}", self.username, self.password)
@@ -124,7 +127,10 @@ pub trait ServiceChecker: Send + Sync {
             if proxy_url.starts_with("socks5") {
                 return match timeout(
                     Duration::from_secs(5),
-                    tokio_socks::tcp::socks5::Socks5Stream::connect(proxy_url.as_str(), target.clone()),
+                    tokio_socks::tcp::socks5::Socks5Stream::connect(
+                        proxy_url.as_str(),
+                        target.clone(),
+                    ),
                 )
                 .await
                 {

@@ -65,6 +65,7 @@ defaulthound-gui
 | **导出 CSV** | 一键导出扫描结果到 CSV 文件 |
 | **亮色/暗色** | 顶部控制栏一键切换 Light / Night 主题 |
 | **代理设置** | 内置弹窗设置 SOCKS5/HTTP 代理，支持保存/清除 |
+| **默认凭据库** | 3766 条内置默认凭据，支持搜索过滤、右键复制、虚拟化表格 |
 | **扫描控制** | 开始扫描 / 停止扫描 |
 | **清除结果** | 一键清空扫描结果 |
 
@@ -125,6 +126,13 @@ defaulthound -f targets.txt -p socks5://127.0.0.1:1080
 
 # HTTP 代理
 defaulthound 192.168.1.1 --proxy http://proxy:8080
+
+# 显示默认凭据表
+defaulthound --show
+
+# 搜索默认凭据
+defaulthound --show redis
+defaulthound --show admin
 ```
 
 ### 目标格式
@@ -223,7 +231,7 @@ src/
 ├── bin/
 │   ├── defaulthound.rs     # CLI 入口
 │   └── defaulthound-gui.rs # GUI 入口（egui 原生桌面）
-├── gui/                    # GUI 模块（计划中，当前在 bin 文件内）
+├── default_creds.rs        # 默认凭据数据库（3766 条）
 ├── checkers/
 │   ├── mod.rs              # 注册中心
 │   ├── http_helpers.rs     # HTTP 检测辅助函数

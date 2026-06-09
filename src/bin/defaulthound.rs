@@ -103,6 +103,8 @@ struct Target {
     ports: Vec<u16>,
     /// 服务级覆盖：service → port，有值时仅运行这些服务
     overrides: HashMap<String, Option<u16>>,
+    /// URL scheme: None=全部, Some("http")=仅HTTP, Some("https")=仅HTTPS
+    scheme: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,10 +127,21 @@ struct ScanEntry {
 fn parse_targets(content: &str) -> Vec<Target> {
     let mut targets = Vec::new();
     for line in content.lines() {
-        let line = line.trim();
+        let mut line = line.trim().to_string();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+
+        // 检测 http:// 或 https:// 前缀
+        let scheme = if line.to_lowercase().starts_with("https://") {
+            line = line[8..].to_string();
+            Some("https".to_string())
+        } else if line.to_lowercase().starts_with("http://") {
+            line = line[7..].to_string();
+            Some("http".to_string())
+        } else {
+            None
+        };
 
         // 格式: ip, ip:port, ip:port1,port2, ip:service^port, ip:service^
         if let Some((ip, port_part)) = line.split_once(':') {
@@ -153,6 +166,7 @@ fn parse_targets(content: &str) -> Vec<Target> {
                     ip: ip.to_string(),
                     ports: vec![],
                     overrides,
+                    scheme: scheme.clone(),
                 });
             } else {
                 let ports: Vec<u16> = parts.iter().filter_map(|p| p.parse().ok()).collect();
@@ -160,6 +174,7 @@ fn parse_targets(content: &str) -> Vec<Target> {
                     ip: ip.to_string(),
                     ports,
                     overrides: HashMap::new(),
+                    scheme: scheme.clone(),
                 });
             }
         } else {
@@ -167,6 +182,7 @@ fn parse_targets(content: &str) -> Vec<Target> {
                 ip: line.to_string(),
                 ports: vec![],
                 overrides: HashMap::new(),
+                scheme: scheme.clone(),
             });
         }
     }
@@ -212,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
             ip,
             ports: vec![],
             overrides: HashMap::new(),
+            scheme: None,
         }]
     };
 
@@ -273,12 +290,30 @@ async fn main() -> anyhow::Result<()> {
     let mut results: Vec<ScanEntry> = Vec::new();
     let mut vuln_targets: HashSet<usize> = HashSet::new();
 
+    // HTTP 检测器列表（用于 scheme 过滤）
+    let http_checkers: [&str; 28] = [
+        "Docker","DockerRegistry","Elasticsearch","Jenkins","Kibana","Kubernetes",
+        "Jupyter","Nacos","NacosWeakpass","Ollama","Spark","Weblogic","Hadoop",
+        "JBoss","ActiveMQ","Zabbix","RabbitMQ","Solr","Harbor","WordPress",
+        "Crowd","Kong","ThinkAdmin","Swagger","SpringBoot","Druid","RuoYi",
+        "uWSGI",
+    ];
+
     let tasks = checkers.iter().flat_map(|checker| {
         let svc_name = checker.service_name().to_lowercase();
+        let is_http = http_checkers.contains(&checker.service_name());
         targets
             .iter()
             .enumerate()
             .filter_map(move |(target_idx, target)| {
+                // scheme 过滤
+                if let Some(ref scheme) = target.scheme {
+                    let http_match = (scheme == "http" || scheme == "https") && is_http;
+                    let tcp_match = scheme == "tcp" && !is_http;
+                    if !http_match && !tcp_match {
+                        return None;
+                    }
+                }
                 // 有 overrides 时只运行匹配的服务
                 if !target.overrides.is_empty() {
                     let port = match target.overrides.get(&svc_name) {

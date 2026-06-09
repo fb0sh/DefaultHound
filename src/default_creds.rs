@@ -3999,7 +3999,7 @@ pub static DEFAULT_CREDS: &[CredEntry] = &[
     CredEntry { vendor: "华为交换机(S12700)", version: "V200R013C00", username: "admin", password: "admin@huawei.com" },
     CredEntry { vendor: "华为交换机(S12700)", version: "V200R013C00", username: "-", password: "-" },
     CredEntry { vendor: "华为交换机(S12700E)", version: "V200R019C00", username: "-", password: "Admin@huawei.com" },
-    CredEntry { vendor: "华为交换机(S12700E)", version: "V200R019C00", username: "admin", password: "admin@huawei.com" },
+    CredEntry { vendor: "华为交换机(S12700deE)", version: "V200R019C00", username: "admin", password: "admin@huawei.com" },
     CredEntry { vendor: "华为交换机(S12700E)", version: "V200R019C00", username: "-", password: "-" },
     CredEntry { vendor: "华为交换机(S1720)", version: "V200R013C00", username: "-", password: "Admin@huawei.com" },
     CredEntry { vendor: "华为交换机(S1720)", version: "V200R013C00", username: "admin", password: "admin@huawei.com" },

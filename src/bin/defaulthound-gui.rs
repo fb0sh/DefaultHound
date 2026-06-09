@@ -191,14 +191,32 @@ impl DefaultHoundApp {
             let mut tasks = Vec::new();
             for target_line in &targets {
                 let parsed = parse_target_line(target_line);
-                let (service_filter, ip, ports) = match parsed {
+                let (service_filter, scheme, ip, ports) = match parsed {
                     Some(p) => p,
                     None => continue,
                 };
+
+                // HTTP 检测器列表
+                let http_svcs: [&str; 28] = [
+                    "docker","dockerregistry","elasticsearch","jenkins","kibana","kubernetes",
+                    "jupyter","nacos","nacosweakpass","ollama","spark","weblogic","hadoop",
+                    "jboss","activemq","zabbix","rabbitmq","solr","harbor","wordpress",
+                    "crowd","kong","thinkadmin","swagger","springboot","druid","ruoyi",
+                    "uwsgi",
+                ];
+
                 for checker in &checkers {
                     let svc = checker.service_name().to_lowercase();
+                    // service^ 过滤
                     if let Some(ref filter) = service_filter {
                         if filter != &svc {
+                            continue;
+                        }
+                    }
+                    // scheme 过滤
+                    if let Some(ref s) = scheme {
+                        let is_http = http_svcs.contains(&svc.as_str());
+                        if (s == "http" || s == "https") && !is_http {
                             continue;
                         }
                     }
@@ -284,7 +302,7 @@ impl DefaultHoundApp {
     }
 }
 
-/// 解析目标行，返回 (service_filter, ip, ports)
+/// 解析目标行，返回 (service_filter, scheme, ip, ports)
 ///
 /// 支持格式:
 /// - `ip`                         所有服务使用默认端口
@@ -294,11 +312,22 @@ impl DefaultHoundApp {
 /// - `service^ip:port`            指定服务 + 端口
 /// - `ip:service^port`            指定服务 + 端口（等同上一行）
 /// - `ip:service^`                指定服务，默认端口
-fn parse_target_line(line: &str) -> Option<(Option<String>, String, Vec<u16>)> {
+/// - `http://ip:port`             仅 HTTP 检测器
+/// - `https://ip:port`            仅 HTTPS 检测器
+fn parse_target_line(line: &str) -> Option<(Option<String>, Option<String>, String, Vec<u16>)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
         return None;
     }
+
+    // 检测 http:// 或 https:// 前缀
+    let (line, scheme) = if line.to_lowercase().starts_with("https://") {
+        (&line[8..], Some("https".to_string()))
+    } else if line.to_lowercase().starts_with("http://") {
+        (&line[7..], Some("http".to_string()))
+    } else {
+        (line, None)
+    };
 
     if let Some(caret_pos) = line.find('^') {
         let (left, right) = (&line[..caret_pos], &line[caret_pos + 1..]);
@@ -315,7 +344,7 @@ fn parse_target_line(line: &str) -> Option<(Option<String>, String, Vec<u16>)> {
                     .filter_map(|p| p.trim().parse().ok())
                     .collect()
             };
-            Some((Some(service), ip, ports))
+            Some((Some(service), scheme, ip, ports))
         } else {
             // 格式: service^ip 或 service^ip:port
             let service = left.trim().to_lowercase();
@@ -324,9 +353,9 @@ fn parse_target_line(line: &str) -> Option<(Option<String>, String, Vec<u16>)> {
                     .split(',')
                     .filter_map(|p| p.trim().parse().ok())
                     .collect();
-                Some((Some(service), ip.to_string(), ports))
+                Some((Some(service), scheme, ip.to_string(), ports))
             } else {
-                Some((Some(service), right.to_string(), vec![]))
+                Some((Some(service), scheme, right.to_string(), vec![]))
             }
         }
     } else {
@@ -336,9 +365,9 @@ fn parse_target_line(line: &str) -> Option<(Option<String>, String, Vec<u16>)> {
                 .split(',')
                 .filter_map(|p| p.trim().parse().ok())
                 .collect();
-            Some((None, ip.to_string(), ports))
+            Some((None, scheme, ip.to_string(), ports))
         } else {
-            Some((None, line.to_string(), vec![]))
+            Some((None, scheme, line.to_string(), vec![]))
         }
     }
 }
@@ -526,20 +555,7 @@ impl eframe::App for DefaultHoundApp {
                 ui.heading("Targets");
                 ui.add_space(4.0);
 
-                // 输入框只能上下拉动（高度可调，宽度固定）
-                let avail_w = ui.available_width();
-                egui::Resize::default()
-                    .id_salt("target_input_resize")
-                    .min_size(egui::vec2(avail_w, 80.0))
-                    .max_size(egui::vec2(avail_w, f32::INFINITY))
-                    .show(ui, |ui| {
-                        ui.set_width(avail_w);
-                        ui.add_sized(
-                            ui.available_size(),
-                            egui::TextEdit::multiline(&mut self.target_input)
-                                .hint_text("172.20.0.2           # scan all services (default ports)\n172.20.0.2:11211    # scan specific port\n172.20.0.2:27017,3306 # scan multiple ports\n172.20.0.2:redis^5984   # Redis custom port\n172.20.0.2:redis^       # Redis default port"),
-                        );
-                    });
+                // 按钮放在输入框上面
                 ui.horizontal(|ui| {
                     if ui.button("+ Add").clicked() {
                         for line in self.target_input.lines() {
@@ -575,6 +591,19 @@ impl eframe::App for DefaultHoundApp {
                     }
                 });
 
+                // 固定高度输入框（不随内容变化）
+                egui::ScrollArea::vertical()
+                    .id_salt("target_input_scroll")
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        ui.add_sized(
+                            egui::vec2(ui.available_width(), 120.0),
+                            egui::TextEdit::multiline(&mut self.target_input)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("172.20.0.2           # scan all services (default ports)\n172.20.0.2:11211    # scan specific port\n172.20.0.2:27017,3306 # scan multiple ports\n172.20.0.2:redis^5984   # Redis custom port\n172.20.0.2:redis^       # Redis default port"),
+                        );
+                    });
+
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
@@ -582,30 +611,60 @@ impl eframe::App for DefaultHoundApp {
                 let total = self.targets.len();
                 let enabled = self.targets.iter().filter(|t| t.enabled).count();
 
+                let row_h = 20.0;
+                let total_targets = self.targets.len();
+                let mut remove_idx: Option<usize> = None;
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let mut remove_idx: Option<usize> = None;
-                        for (i, target) in self.targets.iter_mut().enumerate() {
-                            let raw = target.raw.clone();
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut target.enabled, "");
-                                let lbl = ui.add(egui::Label::new(&raw).selectable(true));
-                                lbl.context_menu(move |ui| {
-                                    if ui.button("复制目标").clicked() {
-                                        ui.ctx().copy_text(raw.clone());
-                                        ui.close_menu();
-                                    }
-                                });
-                                if ui.button("x").clicked() {
-                                    remove_idx = Some(i);
+                    .show_rows(ui, row_h, total_targets, |ui, row_range| {
+                        for i in row_range {
+                            let raw = self.targets[i].raw.clone();
+                            let mut enabled = self.targets[i].enabled;
+
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), row_h),
+                                egui::Sense::hover(),
+                            );
+                            let x0 = rect.min.x;
+                            let y0 = rect.min.y;
+
+                            // Checkbox
+                            let cb = egui::Checkbox::new(&mut enabled, "");
+                            let cb_resp = ui.put(
+                                egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(20.0, row_h)),
+                                cb,
+                            );
+                            if cb_resp.changed() {
+                                self.targets[i].enabled = enabled;
+                            }
+
+                            // Label
+                            let lbl = ui.put(
+                                egui::Rect::from_min_size(egui::pos2(x0 + 20.0, y0), egui::vec2(ui.available_width() - 60.0 - 20.0, row_h)),
+                                egui::Label::new(&raw).selectable(true),
+                            );
+                            lbl.context_menu(move |ui| {
+                                if ui.button("复制目标").clicked() {
+                                    ui.ctx().copy_text(raw.clone());
+                                    ui.close_menu();
                                 }
                             });
-                        }
-                        if let Some(idx) = remove_idx {
-                            self.targets.remove(idx);
+
+                            // Delete button
+                            let del_resp = ui.put(
+                                egui::Rect::from_min_size(egui::pos2(x0 + ui.available_width() - 20.0, y0), egui::vec2(20.0, row_h)),
+                                egui::Button::new("x"),
+                            );
+                            if del_resp.clicked() {
+                                remove_idx = Some(i);
+                            }
                         }
                     });
+
+                if let Some(idx) = remove_idx {
+                    self.targets.remove(idx);
+                }
 
                 ui.add_space(4.0);
                 ui.label(format!("Total: {total} | Active: {enabled}"));
@@ -787,11 +846,16 @@ impl DefaultHoundApp {
             return;
         }
 
+        let row_h = 20.0;
+        let total = results.len();
+
         egui::ScrollArea::vertical()
             .stick_to_bottom(true)
             .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for entry in results.iter().rev() {
+            .show_rows(ui, row_h, total, |ui, row_range| {
+                for idx in row_range {
+                    let ri = total - 1 - idx;
+                    let entry = &results[ri];
                     let (color, prefix) = if entry.vulnerable {
                         (egui::Color32::RED, "[VULN]")
                     } else if entry.status == "错误" {
@@ -805,24 +869,28 @@ impl DefaultHoundApp {
                     let entry_detail = entry.detail.clone();
                     let entry_service = entry.service.clone();
 
-                    let inner = ui.horizontal(|ui| {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(format!(
-                                    "{prefix}[{entry_service}] {entry_ip}:{entry_port}"
-                                ))
-                                .color(color),
-                            )
-                            .selectable(true),
-                        );
-                        ui.add(egui::Label::new(&entry_detail).selectable(true));
-                    });
-                    inner.response.context_menu(move |ui| {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), row_h),
+                        egui::Sense::hover(),
+                    );
+                    let x0 = rect.min.x;
+                    let y0 = rect.min.y;
+                    let tag = format!("{prefix}[{entry_service}] {entry_ip}:{entry_port}");
+
+                    ui.put(
+                        egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(ui.available_width() * 0.45, row_h)),
+                        egui::Label::new(egui::RichText::new(&tag).color(color)).selectable(true),
+                    );
+                    let d_resp = ui.put(
+                        egui::Rect::from_min_size(egui::pos2(x0 + ui.available_width() * 0.45, y0), egui::vec2(ui.available_width() * 0.55, row_h)),
+                        egui::Label::new(entry_detail.as_str()).selectable(true),
+                    );
+                    d_resp.context_menu(move |ui| {
                         if ui.button("复制 IP:Port").clicked() {
                             ui.ctx().copy_text(format!("{entry_ip}:{entry_port}"));
                             ui.close_menu();
                         }
-                        if ui.button("复制服务标识").clicked() {
+                        if ui.button("复制全部").clicked() {
                             ui.ctx().copy_text(format!(
                                 "{prefix}[{entry_service}] {entry_ip}:{entry_port}  {entry_detail}"
                             ));

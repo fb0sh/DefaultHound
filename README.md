@@ -174,6 +174,12 @@ defaulthound --show
 # 搜索默认凭据
 defaulthound --show redis
 defaulthound --show admin
+
+# 仅扫描 HTTP 服务
+defaulthound http://192.168.1.1:8080
+
+# 仅扫描 HTTPS 服务
+defaulthound https://192.168.1.1:443
 ```
 
 ### 目标格式
@@ -188,6 +194,8 @@ defaulthound --show admin
 | `ip:service^port` | 指定服务 + 非标端口 | `192.168.1.1:redis^6379` |
 | `ip:service^port1,service2^port2` | 多个服务各自指定端口 | `192.168.1.1:redis^6379,mysql^6380` |
 | `ip:service^` | 指定服务 + 默认端口 | `192.168.1.1:redis^` |
+| `http://ip:port` | 仅 HTTP 检测器 | `http://192.168.1.1:8080` |
+| `https://ip:port` | 仅 HTTPS 检测器 | `https://192.168.1.1:443` |
 
 #### ⭐ 核心创新：`service^` 前缀
 

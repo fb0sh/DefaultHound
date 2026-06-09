@@ -1,6 +1,6 @@
 [package]
 name = "defaulthound"
-version = "2.7.0"
+version = "2.8.0"
 edition = "2024"
 description = "A batch scanner that hunts default/empty passwords across network services"
 license = "MIT"

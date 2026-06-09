@@ -169,7 +169,7 @@ impl DefaultHoundApp {
             .store(true, Ordering::Release);
     }
 
-    fn start_scan(&mut self) {
+    fn start_scan(&mut self, clear_previous: bool) {
         if self.cached_scanning {
             return;
         }
@@ -188,13 +188,18 @@ impl DefaultHoundApp {
         state.is_scanning.store(true, Ordering::Release);
         state.stop_requested.store(false, Ordering::Release);
         state.progress_current.store(0, Ordering::Release);
-        if let Ok(mut results) = state.results.lock() {
-            results.clear();
+        if clear_previous {
+            if let Ok(mut results) = state.results.lock() {
+                results.clear();
+            }
         }
 
         let checkers = checkers::all_checkers();
         let total_checks = targets.len() * checkers.len();
         self.scan_start_time = Some(std::time::Instant::now());
+        self.scan_last_progress = 0;
+        self.scan_last_time = None;
+        self.scan_eta_rate = 0.0;
         state.progress_total.store(total_checks, Ordering::Release);
 
         tokio::spawn(async move {
@@ -444,8 +449,14 @@ impl eframe::App for DefaultHoundApp {
                                         self.stop_scan();
                                     }
                                 } else {
-                                    if ui.button("> Start Scan").clicked() {
-                                        self.start_scan();
+                                    let btn_label = if self.cached_results.is_empty() {
+                                        "> Start Scan"
+                                    } else {
+                                        "Resume"
+                                    };
+                                    let clear_prev = self.cached_results.is_empty();
+                                    if ui.button(btn_label).clicked() {
+                                        self.start_scan(clear_prev);
                                     }
                                 }
 
@@ -802,11 +813,9 @@ impl eframe::App for DefaultHoundApp {
                             if remaining.is_finite() && remaining > 0.0 {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if remaining > 60.0 {
-                                        ui.colored_label(egui::Color32::LIGHT_BLUE,
-                                            format!("ETA {:.0}m{:.0}s", remaining / 60.0, remaining % 60.0));
+                                        ui.label(format!("ETA {:.0}m{:.0}s", remaining / 60.0, remaining % 60.0));
                                     } else {
-                                        ui.colored_label(egui::Color32::LIGHT_BLUE,
-                                            format!("ETA {:.0}s", remaining));
+                                        ui.label(format!("ETA {:.0}s", remaining));
                                     }
                                 });
                             }

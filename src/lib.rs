@@ -106,6 +106,11 @@ pub trait ServiceChecker: Send + Sync {
     fn service_name(&self) -> &'static str;
     fn default_port(&self) -> u16;
 
+    /// 协议类型: "tcp", "http", "udp", "smtp" 等
+    fn proto(&self) -> &'static str {
+        "tcp"
+    }
+
     /// 该服务常见的默认/空密码凭据列表
     fn default_credentials(&self) -> Vec<Credential> {
         Vec::new()

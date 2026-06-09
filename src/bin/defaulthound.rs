@@ -237,11 +237,13 @@ async fn main() -> anyhow::Result<()> {
     if cli.list {
         let mut services: Vec<_> = checkers
             .iter()
-            .map(|c| (c.service_name(), c.default_port()))
+            .map(|c| (c.service_name(), c.default_port(), c.proto()))
             .collect();
         services.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
-        for (name, port) in services {
-            println!("{:<20} {}", name, port);
+        println!("{:<20} {:<6} {}", "Service", "Port", "Type");
+        println!("{}", "-".repeat(32));
+        for (name, port, proto) in services {
+            println!("{:<20} {:<6} {}", name, port, proto);
         }
         return Ok(());
     }

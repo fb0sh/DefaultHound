@@ -30,6 +30,7 @@ struct ScanEntry {
     status: &'static str,
     detail: String,
     vulnerable: bool,
+    url: String,
     timestamp: String,
 }
 
@@ -55,6 +56,14 @@ impl ScanState {
         })
     }
 }
+
+/// HTTP 检测器列表（用于生成 URL）
+const HTTP_SERVICES: &[&str] = &[
+    "Docker","DockerRegistry","Elasticsearch","Jenkins","Kibana","Kubernetes",
+    "Jupyter","Nacos","NacosWeakpass","Ollama","Spark","Weblogic","Hadoop",
+    "JBoss","ActiveMQ","Zabbix","RabbitMQ","Solr","Harbor","WordPress",
+    "Crowd","Kong","ThinkAdmin","Swagger","SpringBoot","Druid","RuoYi","uWSGI",
+];
 
 fn timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -276,37 +285,30 @@ impl DefaultHoundApp {
                 }
 
                 let ts = timestamp();
-                let entry = match &result {
-                    CheckResult::Secure(reason) => ScanEntry {
-                        service: svc_name,
-                        ip,
-                        port,
-                        status: "安全",
-                        detail: reason.clone(),
-                        vulnerable: false,
-                        timestamp: ts,
+                // Build scan entry from result
+                let svc_name_clone = svc_name.clone();
+                let ip_clone = ip.clone();
+                let (entry_svc, entry_ip, entry_status, entry_detail, entry_vuln) = match &result {
+                    CheckResult::Secure(reason) => (svc_name, ip, "安全", reason.clone(), false),
+                    CheckResult::Vulnerable { credentials, details } => {
+                        (svc_name, ip, "高危", format!("凭据「{}」: {}", credentials, details), true)
                     },
-                    CheckResult::Vulnerable {
-                        credentials,
-                        details,
-                    } => ScanEntry {
-                        service: svc_name,
-                        ip,
-                        port,
-                        status: "高危",
-                        detail: format!("凭据「{}」: {}", credentials, details),
-                        vulnerable: true,
-                        timestamp: ts,
-                    },
-                    CheckResult::Error(e) => ScanEntry {
-                        service: svc_name,
-                        ip,
-                        port,
-                        status: "错误",
-                        detail: e.clone(),
-                        vulnerable: false,
-                        timestamp: ts,
-                    },
+                    CheckResult::Error(e) => (svc_name, ip, "错误", e.clone(), false),
+                };
+                let entry_url = if HTTP_SERVICES.contains(&svc_name_clone.as_str()) {
+                    format!("http://{}:{}", ip_clone, port)
+                } else {
+                    String::new()
+                };
+                let entry = ScanEntry {
+                    service: entry_svc,
+                    ip: entry_ip,
+                    port,
+                    status: entry_status,
+                    detail: entry_detail,
+                    vulnerable: entry_vuln,
+                    url: entry_url,
+                    timestamp: ts,
                 };
                 if let Ok(mut results) = state.results.lock() {
                     results.push(entry);
@@ -496,7 +498,18 @@ impl eframe::App for DefaultHoundApp {
                                         .save_file()
                                     {
                                         let results = self.cached_results.clone();
-                                        if let Ok(mut wtr) = csv::Writer::from_path(&path) {
+                                        // 写入 UTF-8 BOM 解决中文乱码
+                                        if let Ok(file) = std::fs::OpenOptions::new()
+                                            .write(true)
+                                            .create(true)
+                                            .truncate(true)
+                                            .open(&path)
+                                        {
+                                            use std::io::Write;
+                                            let mut file = file;
+                                            // BOM for Excel
+                                            let _ = file.write_all(b"\xef\xbb\xbf");
+                                            let mut wtr = csv::Writer::from_writer(file);
                                             let _ = wtr.write_record([
                                                 "service",
                                                 "ip",
@@ -504,6 +517,7 @@ impl eframe::App for DefaultHoundApp {
                                                 "status",
                                                 "detail",
                                                 "vulnerable",
+                                                "url",
                                             ]);
                                             for e in &results {
                                                 let _ = wtr.write_record([
@@ -513,6 +527,7 @@ impl eframe::App for DefaultHoundApp {
                                                     e.status,
                                                     &e.detail,
                                                     &e.vulnerable.to_string(),
+                                                    &e.url,
                                                 ]);
                                             }
                                             let _ = wtr.flush();
@@ -967,60 +982,64 @@ impl DefaultHoundApp {
             return;
         }
 
-        egui::ScrollArea::vertical()
+        // 固定表头（不含 ScrollArea）
+        ui.horizontal(|ui| {
+            ui.strong("Service");
+            ui.separator();
+            ui.strong("IP");
+            ui.separator();
+            ui.strong("Port");
+            ui.separator();
+            ui.strong("Creds");
+            ui.separator();
+            ui.strong("URL");
+            ui.separator();
+            ui.strong("Detail");
+        });
+        ui.separator();
+
+        // 数据区域：可横向和纵向滚动，不限制列宽
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                egui::Grid::new("vuln_table")
+                egui::Grid::new("vuln_grid")
                     .striped(true)
-                    .min_col_width(60.0)
+                    .min_col_width(40.0)
                     .show(ui, |ui| {
-                        ui.strong("Service");
-                        ui.strong("IP");
-                        ui.strong("Port");
-                        ui.strong("Creds");
-                        ui.strong("Detail");
-                        ui.end_row();
-
                         for entry in &vulns {
+                            let en_svc = entry.service.clone();
                             let en_ip = entry.ip.clone();
                             let en_port = entry.port;
-                            let en_svc = entry.service.clone();
                             let en_detail = entry.detail.clone();
-                            let cred = entry
-                                .detail
-                                .split('»')
-                                .next()
-                                .unwrap_or(&entry.detail)
-                                .to_string();
+                            let cred = entry.detail.split('»').next().unwrap_or(&entry.detail).to_string();
+                            let url = entry.url.clone();
 
-                            let svc_label = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&en_svc).color(egui::Color32::RED),
-                                )
-                                .selectable(true),
-                            );
-                            ui.add(egui::Label::new(&en_ip).selectable(true));
-                            ui.add(egui::Label::new(en_port.to_string()).selectable(true));
-                            ui.add(egui::Label::new(&cred).selectable(true));
-                            ui.add(egui::Label::new(&en_detail).selectable(true));
-                            ui.end_row();
-
-                            svc_label.context_menu(move |ui| {
-                                if ui.button("复制 IP:Port").clicked() {
-                                    ui.ctx().copy_text(format!("{en_ip}:{en_port}"));
-                                    ui.close_menu();
-                                }
-                                if ui.button("复制凭据").clicked() {
-                                    ui.ctx().copy_text(cred.clone());
-                                    ui.close_menu();
-                                }
-                                if ui.button("复制全部").clicked() {
-                                    ui.ctx().copy_text(format!(
-                                        "[{en_svc}] {en_ip}:{en_port} — {cred}"
-                                    ));
-                                    ui.close_menu();
-                                }
+                            // 每个单元格右键复制
+                            let s = ui.add(egui::Label::new(egui::RichText::new(&en_svc).color(egui::Color32::RED)).selectable(true));
+                            s.context_menu(move |ui| {
+                                if ui.button("复制服务").clicked() { ui.ctx().copy_text(en_svc.clone()); ui.close_menu(); }
                             });
+                            let i2 = ui.add(egui::Label::new(&en_ip).selectable(true));
+                            i2.context_menu(move |ui| {
+                                if ui.button("复制 IP").clicked() { ui.ctx().copy_text(en_ip.clone()); ui.close_menu(); }
+                            });
+                            let p2 = ui.add(egui::Label::new(en_port.to_string()).selectable(true));
+                            p2.context_menu(move |ui| {
+                                if ui.button("复制端口").clicked() { ui.ctx().copy_text(en_port.to_string()); ui.close_menu(); }
+                            });
+                            let c2 = ui.add(egui::Label::new(&cred).selectable(true));
+                            c2.context_menu(move |ui| {
+                                if ui.button("复制凭据").clicked() { ui.ctx().copy_text(cred.clone()); ui.close_menu(); }
+                            });
+                            let u2 = ui.add(egui::Label::new(&url).selectable(true));
+                            u2.context_menu(move |ui| {
+                                if ui.button("复制 URL").clicked() { ui.ctx().copy_text(url.clone()); ui.close_menu(); }
+                            });
+                            let d2 = ui.add(egui::Label::new(&en_detail).selectable(true));
+                            d2.context_menu(move |ui| {
+                                if ui.button("复制详情").clicked() { ui.ctx().copy_text(en_detail.clone()); ui.close_menu(); }
+                            });
+                            ui.end_row();
                         }
                     });
             });
@@ -1057,9 +1076,7 @@ impl DefaultHoundApp {
                     let name = checker.service_name();
                     let port = checker.default_port();
                     let creds = checker.default_credentials();
-                    // Determine type and examples
-                    let tcp_http = ["FTP","ZooKeeper","MongoDB","LDAP","VNC","Memcached","NFS","Dubbo","Rsync","SMB","uWSGI","CouchDB","MySQL","Redis"];
-                    let svc_type = if tcp_http.contains(&name) { "TCP" } else { "HTTP" };
+                    let svc_type = checker.proto();
                     let examples: Vec<String> = creds.iter().take(2).map(|c| c.display()).collect();
                     let examples_str = examples.join(", ");
                     let cred_count = creds.len();

@@ -11,6 +11,10 @@ impl ServiceChecker for NacosWeakpassChecker {
     fn default_port(&self) -> u16 {
         8848
     }
+    fn proto(&self) -> &'static str {
+        "http"
+    }
+
 
     fn default_credentials(&self) -> Vec<Credential> {
         vec![Credential::new("nacos", "nacos")]

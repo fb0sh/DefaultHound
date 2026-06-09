@@ -107,6 +107,12 @@ pub struct DefaultHoundApp {
     // DefaultCreds 搜索
     default_creds_search: RefCell<String>,
 
+    // ── 扫描计时 ──
+    scan_start_time: Option<std::time::Instant>,
+    scan_last_progress: usize,
+    scan_last_time: Option<std::time::Instant>,
+    scan_eta_rate: f64,
+
     // UI 线程缓存
     cached_results: Vec<ScanEntry>,
     cached_progress: (usize, usize),
@@ -131,6 +137,10 @@ impl DefaultHoundApp {
             show_proxy_input: false,
             proxy_input_buffer: String::new(),
             default_creds_search: RefCell::new(String::new()),
+            scan_start_time: None,
+            scan_last_progress: 0,
+            scan_last_time: None,
+            scan_eta_rate: 0.0,
             cached_results: vec![],
             cached_progress: (0, 0),
             cached_scanning: false,
@@ -184,6 +194,7 @@ impl DefaultHoundApp {
 
         let checkers = checkers::all_checkers();
         let total_checks = targets.len() * checkers.len();
+        self.scan_start_time = Some(std::time::Instant::now());
         state.progress_total.store(total_checks, Ordering::Release);
 
         tokio::spawn(async move {
@@ -767,9 +778,40 @@ impl eframe::App for DefaultHoundApp {
                             .speed(1.0)
                             .prefix(" ")
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format!("DefaultHound v{} | <fb0sh@outlook.com> https://github.com/fb0sh/DefaultHound", env!("CARGO_PKG_VERSION")));
-                    });
+                    // 最右侧：ETA（使用平滑速率）
+                    if self.cached_scanning && cur > 0 && tot > 0 && cur < tot {
+                        let now = std::time::Instant::now();
+                        let elapsed_since_last = self.scan_last_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(1.0);
+                        if elapsed_since_last >= 0.5 {
+                            // 更新平滑速率：最近一段时间的瞬时速率
+                            let delta_progress = cur - self.scan_last_progress;
+                            if delta_progress > 0 && elapsed_since_last > 0.0 {
+                                let instant_rate = delta_progress as f64 / elapsed_since_last;
+                                if self.scan_eta_rate == 0.0 {
+                                    self.scan_eta_rate = instant_rate;
+                                } else {
+                                    self.scan_eta_rate = self.scan_eta_rate * 0.7 + instant_rate * 0.3;
+                                }
+                            }
+                            self.scan_last_progress = cur;
+                            self.scan_last_time = Some(now);
+                        }
+
+                        if self.scan_eta_rate > 0.0 {
+                            let remaining = (tot - cur) as f64 / self.scan_eta_rate;
+                            if remaining.is_finite() && remaining > 0.0 {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if remaining > 60.0 {
+                                        ui.colored_label(egui::Color32::LIGHT_BLUE,
+                                            format!("ETA {:.0}m{:.0}s", remaining / 60.0, remaining % 60.0));
+                                    } else {
+                                        ui.colored_label(egui::Color32::LIGHT_BLUE,
+                                            format!("ETA {:.0}s", remaining));
+                                    }
+                                });
+                            }
+                        }
+                    }
                 });
             });
 

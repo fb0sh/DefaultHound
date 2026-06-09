@@ -118,6 +118,7 @@ pub struct DefaultHoundApp {
 
     // ── 扫描计时 ──
     scan_start_time: Option<std::time::Instant>,
+    scan_elapsed_secs: Option<f64>,
     scan_last_progress: usize,
     scan_last_time: Option<std::time::Instant>,
     scan_eta_rate: f64,
@@ -147,6 +148,7 @@ impl DefaultHoundApp {
             proxy_input_buffer: String::new(),
             default_creds_search: RefCell::new(String::new()),
             scan_start_time: None,
+            scan_elapsed_secs: None,
             scan_last_progress: 0,
             scan_last_time: None,
             scan_eta_rate: 0.0,
@@ -161,11 +163,23 @@ impl DefaultHoundApp {
         if let Ok(results) = s.results.lock() {
             self.cached_results = results.clone();
         }
+        let prev_scanning = self.cached_scanning;
         self.cached_progress = (
             s.progress_current.load(Ordering::Acquire),
             s.progress_total.load(Ordering::Acquire),
         );
         self.cached_scanning = s.is_scanning.load(Ordering::Acquire);
+
+        // 扫描刚结束（完成或停止），记录耗时
+        if prev_scanning && !self.cached_scanning {
+            if let Some(start) = self.scan_start_time {
+                self.scan_elapsed_secs = Some(start.elapsed().as_secs_f64());
+            }
+        }
+        // 开始新扫描时清除上次耗时
+        if !prev_scanning && self.cached_scanning {
+            self.scan_elapsed_secs = None;
+        }
     }
 
     fn vuln_results(&self) -> impl Iterator<Item = &ScanEntry> {
@@ -191,6 +205,9 @@ impl DefaultHoundApp {
         if targets.is_empty() {
             return;
         }
+        if self.rate < 1 {
+            self.rate = 1;
+        }
 
         let state = self.scan_state.clone();
         let rate = self.rate;
@@ -206,6 +223,7 @@ impl DefaultHoundApp {
         let checkers = checkers::all_checkers();
         let total_checks = targets.len() * checkers.len();
         self.scan_start_time = Some(std::time::Instant::now());
+        self.scan_elapsed_secs = None;
         self.scan_last_progress = 0;
         self.scan_last_time = None;
         self.scan_eta_rate = 0.0;
@@ -453,8 +471,10 @@ impl eframe::App for DefaultHoundApp {
                                 } else {
                                     let btn_label = if self.cached_results.is_empty() {
                                         "> Start Scan"
-                                    } else {
+                                    } else if self.scan_state.stop_requested.load(Ordering::Acquire) {
                                         "Resume"
+                                    } else {
+                                        "Restart Scan"
                                     };
                                     let clear_prev = self.cached_results.is_empty();
                                     if ui.button(btn_label).clicked() {
@@ -497,7 +517,9 @@ impl eframe::App for DefaultHoundApp {
                                         .set_file_name("defaulthound_results.csv")
                                         .save_file()
                                     {
-                                        let results = self.cached_results.clone();
+                                        let results: Vec<&ScanEntry> = self.cached_results.iter()
+                                            .filter(|e| !self.vuln_only || e.vulnerable)
+                                            .collect();
                                         // 写入 UTF-8 BOM 解决中文乱码
                                         if let Ok(file) = std::fs::OpenOptions::new()
                                             .write(true)
@@ -767,6 +789,12 @@ impl eframe::App for DefaultHoundApp {
                                     .text(format!("{cur}/{tot}")),
                             );
                         }
+                    } else if total > 0 {
+                        ui.add_space(8.0);
+                        if let Some(elapsed) = self.scan_elapsed_secs {
+                            let (m, s) = ((elapsed / 60.0) as u64, (elapsed % 60.0) as u64);
+                            ui.label(format!("Finished — {}m {}s", m, s));
+                        }
                     }
                 });
             });
@@ -800,7 +828,6 @@ impl eframe::App for DefaultHoundApp {
                     ui.label("Rate:");
                     ui.add(
                         egui::DragValue::new(&mut self.rate)
-                            .range(1..=1000)
                             .speed(1.0)
                             .prefix(" ")
                     );
